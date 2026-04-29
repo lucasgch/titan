@@ -1,7 +1,5 @@
 # Robo BT_7274
 
-Descrição
+Robôs desenvolvidos como parte da disciplina de Introdução à Computação do 1º Período de Análise e Desenvolvimento de Sistemas do IFSC - Campus São José.
 
-## Tópico 2
-
-## Tópico 3
+Orientação: [Diego Medeiros](https://github.com/diegomedeiros-IFSC)
