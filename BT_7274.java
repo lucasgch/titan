@@ -25,7 +25,7 @@ public class BT_7274 extends AdvancedRobot
         * bulletColor - the new bullet color
         * scanArcColor - the new scan arc color
         */
-		setColors(null, Color.RED, Color.GREEN, null, new Color(150, 0, 150)); // body,gun,radar
+		setColors(Color.GREEN, Color.ORANGE, Color.ORANGE, Color.RED, Color.BLUE); // body,gun,radar
 
 		// Robot main loop
 		while(true) {
