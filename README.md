@@ -16,6 +16,8 @@ Crie uma branch com o seu nome ou o nome do seu robô
 
 Se você é um contribuidor deste repositório, faça o push das alterações para o repositório.
 
+`git push --set-upstream origin lucas`
+
 Se você não é um contribuir, mas enviar um robô ou uma contribuição, envie um Pool Request.
 
 
