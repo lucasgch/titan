@@ -34,6 +34,4 @@ Se você é um contribuidor deste repositório, faça o push das alterações pa
 
 `git push --set-upstream origin lucas`
 
-Se você não é um contribuir, mas enviar um robô ou uma contribuição, envie um Pool Request.
-
-
+Se você não é um contribuir, mas enviar um robô ou uma contribuição, envie um Pull Request.
