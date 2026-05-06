@@ -1,5 +1,4 @@
-package betinha;
-import robocode.*;
+package sample;
 
 import robocode.AdvancedRobot;
 import robocode.HitWallEvent;
@@ -10,8 +9,9 @@ import java.awt.Color;
 
 /**
  * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * Robô otimizado com movimentação aleatória, rastreio do alvo mais próximo
- * e fuga contornando a parede em situações críticas de vida.
+ * Robô otimizado com movimentação aleatória e rastreio do alvo mais próximo.
+ * Novo: Modo Perseguição se alvo < 100px.
+ * No Modo Sobrevivência (<= 10 vida): foge pelas paredes e utiliza Mira Preditiva.
  */
 public class BT_7274 extends AdvancedRobot {
 
@@ -19,6 +19,7 @@ public class BT_7274 extends AdvancedRobot {
     double closestDistance = 10000;
     long lastScanTime = 0;
     boolean lowHealthMode = false;
+    boolean enemyClose = false; // Flag para controlar o Modo Perseguição
 
     public void run() {
         // Cores inspiradas no Vanguard-class Titan
@@ -36,17 +37,18 @@ public class BT_7274 extends AdvancedRobot {
             // Verifica se a vida chegou em 10 ou menos
             if (getEnergy() <= 10 && !lowHealthMode) {
                 lowHealthMode = true;
+                out.println("Alerta Crítico: Protocolo de sobrevivência e mira preditiva ativados!");
                 setAhead(2000); // Força o robô a correr reto até achar uma parede
             }
 
             // Gira o radar continuamente
             setTurnRadarRight(360);
 
-            // Movimentação Aleatória se a vida estiver acima de 10
-            if (!lowHealthMode) {
+            // Movimentação Aleatória só ocorre se a vida estiver boa E o inimigo estiver longe
+            if (!lowHealthMode && !enemyClose) {
                 if (getDistanceRemaining() == 0 && getTurnRemaining() == 0) {
-                    setAhead((Math.random() * 400) - 150);
-                    setTurnRight((Math.random() * 220) - 60);
+                    setAhead((Math.random() * 300) - 150);
+                    setTurnRight((Math.random() * 120) - 60);
                 }
             }
 
@@ -67,27 +69,37 @@ public class BT_7274 extends AdvancedRobot {
             double firePower = Math.min(3, 400 / e.getDistance());
             double gunTurn;
 
-         
-                // 1. Descobrir a posição (X, Y) exata do inimigo agora
+            // ==========================================
+            // CONTROLE DE MOVIMENTAÇÃO (Perseguição)
+            // ==========================================
+            if (e.getDistance() < 100) {
+                enemyClose = true; // Pausa a movimentação aleatória do run()
+                
+                if (!lowHealthMode) {
+                    // Vira o chassi (corpo do robô) na direção exata do inimigo e avança
+                    setTurnRightRadians(e.getBearingRadians());
+                    setAhead(e.getDistance() + 10); // +10 para garantir que ele cole no alvo
+                }
+            } else {
+                enemyClose = false; // Retoma a movimentação aleatória
+            }
+
+                // ==========================================
+                // MIRA PREDITIVA (Linear Targeting)
+                // ==========================================
                 double absoluteBearing = getHeadingRadians() + e.getBearingRadians();
                 double enemyX = getX() + e.getDistance() * Math.sin(absoluteBearing);
                 double enemyY = getY() + e.getDistance() * Math.cos(absoluteBearing);
                 
-                // 2. Calcular o tempo de viagem da bala
                 double bulletSpeed = 20 - (3 * firePower);
                 double time = e.getDistance() / bulletSpeed;
                 
-                // 3. Prever a posição futura (X, Y) baseada na velocidade do inimigo
                 double futureX = enemyX + Math.sin(e.getHeadingRadians()) * e.getVelocity() * time;
                 double futureY = enemyY + Math.cos(e.getHeadingRadians()) * e.getVelocity() * time;
                 
-                // 4. Calcular o ângulo para essa posição futura
                 double absoluteBearingToFuture = Math.atan2(futureX - getX(), futureY - getY());
-                
-                // 5. Determinar o quanto o canhão precisa virar
                 gunTurn = Utils.normalRelativeAngle(absoluteBearingToFuture - getGunHeadingRadians());
                 
-            
             // Vira o canhão
             setTurnGunRightRadians(gunTurn);
 
@@ -115,6 +127,7 @@ public class BT_7274 extends AdvancedRobot {
         if (e.getName().equals(trackName)) {
             trackName = null;
             closestDistance = 10000;
+            enemyClose = false; // Volta a se mover aleatoriamente
         }
     }
 }
