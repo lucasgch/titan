@@ -34,7 +34,7 @@ public class BT_7274 extends AdvancedRobot {
 
         while (true) {
             // Verifica se a vida chegou em 10 ou menos
-            if (getEnergy() <= 5 && !lowHealthMode) {
+            if (getEnergy() <= 10 && !lowHealthMode) {
                 lowHealthMode = true;
                 setAhead(2000); // Força o robô a correr reto até achar uma parede
             }
@@ -67,8 +67,7 @@ public class BT_7274 extends AdvancedRobot {
             double firePower = Math.min(3, 400 / e.getDistance());
             double gunTurn;
 
-            if (lowHealthMode) {
-                
+         
                 // 1. Descobrir a posição (X, Y) exata do inimigo agora
                 double absoluteBearing = getHeadingRadians() + e.getBearingRadians();
                 double enemyX = getX() + e.getDistance() * Math.sin(absoluteBearing);
@@ -88,13 +87,6 @@ public class BT_7274 extends AdvancedRobot {
                 // 5. Determinar o quanto o canhão precisa virar
                 gunTurn = Utils.normalRelativeAngle(absoluteBearingToFuture - getGunHeadingRadians());
                 
-            } else {
-                // ==========================================
-                // MIRA DIRETA (Padrão)
-                // ==========================================
-                double absoluteBearing = getHeadingRadians() + e.getBearingRadians();
-                gunTurn = Utils.normalRelativeAngle(absoluteBearing - getGunHeadingRadians());
-            }
             
             // Vira o canhão
             setTurnGunRightRadians(gunTurn);
