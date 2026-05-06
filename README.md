@@ -4,6 +4,22 @@ Robôs desenvolvidos como parte da disciplina de Introdução à Computação do
 
 Orientação: [Diego Medeiros](https://github.com/diegomedeiros-IFSC)
 
+## Como baixar e instalar o robocode
+
+Acesse o repositório oficial e faça o download da útima versão: [https://robocode.sourceforge.io/](https://robocode.sourceforge.io/)
+
+Instale o robocode:
+```shell
+java -jar robocode-1.10.1-setup.jar 
+```
+
+Entre na pasta e execute:
+
+```shell
+cd robocode
+./robocode.sh
+```
+
 ## Como contribuir
 
 Clone o repositório
