@@ -2,7 +2,7 @@ java
 import robocode.*;
 import java.awt.Color;
 
-public class EsquivaBot extends AdvancedRobot {
+public class Robozika extends AdvancedRobot {
     double energiaInimiga = 100.0; // Armazena a última energia vista do inimigo
     int direcaoMovimento = 1;      // 1 para frente, -1 para trás
 
