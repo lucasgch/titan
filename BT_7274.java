@@ -3,16 +3,17 @@ package sample;
 import robocode.*;
 import robocode.util.Utils;
 import java.awt.Color;
+import java.awt.geom.Point2D;
 import java.util.*;
 
 /**
  * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * Versão Master: Perfilamento de Inimigos (Clinger Detection) + ARMA + ARIMA.
+ * Versão Definitiva: ARMA Base + GFT Error Correction + Anti-Clinger.
  */
 public class BT_7274 extends AdvancedRobot {
 
-    // Memória de longo prazo: Aprende os padrões e o TIPO do inimigo
     private static final Map<String, EnemyData> enemyMap = new HashMap<>();
+    private List<Wave> activeWaves = new ArrayList<>(); 
     
     private String trackName = null;
     private double closestDistance = 10000;
@@ -20,34 +21,39 @@ public class BT_7274 extends AdvancedRobot {
     private int moveDirection = 1;
     private double lastEnemyEnergy = 100;
 
-    // --- DADOS TÁTICOS E PERFILAMENTO ---
+    // --- ESTRUTURA DE ONDAS ---
+    static class Wave {
+        double startX, startY, bulletSpeed, armaPredictedAngle;
+        int direction;
+        long fireTime;
+        String enemyName;
+    }
+
+    // --- DADOS TÁTICOS (HÍBRIDO) ---
     static class EnemyData {
         double avgVelocity = 0;
         double avgHeadingChange = 0;
         double lastHeading = 0;
-        List<Double> shotBearings = new ArrayList<>(); 
         
-        // Dados de Detecção de Clinger
+        // GFT Bins agora rastreiam o ERRO do ARMA. Índice 15 = ARMA perfeito (0 erro).
+        int[] armaErrorBins = new int[31]; 
+        
+        List<Double> shotBearings = new ArrayList<>(); 
         boolean isClinger = false;
-        int closeTicks = 0; // Quantos ticks ele passou perigosamente perto?
+        int closeTicks = 0;
 
         void updateStats(double v, double h, double dist) {
             double hChange = Utils.normalRelativeAngle(h - lastHeading);
-            
-            // ARMA: Média Móvel Exponencial
             avgVelocity = (v * 0.7) + (avgVelocity * 0.3);
             avgHeadingChange = (hChange * 0.7) + (avgHeadingChange * 0.3);
             lastHeading = h;
 
-            // Análise Comportamental: Se ele passa muito tempo a menos de 45px, ele é um clinger.
             if (!isClinger) {
                 if (dist < 45) {
                     closeTicks++;
-                    if (closeTicks > 20) { // Cerca de 20 ticks colado é o suficiente para confirmar
-                        isClinger = true;
-                    }
+                    if (closeTicks > 20) isClinger = true;
                 } else if (dist > 100) {
-                    closeTicks = Math.max(0, closeTicks - 1); // Reduz suspeita se ele se afastar
+                    closeTicks = Math.max(0, closeTicks - 1);
                 }
             }
         }
@@ -76,9 +82,7 @@ public class BT_7274 extends AdvancedRobot {
         setAdjustRadarForRobotTurn(true);
 
         while (true) {
-            if (trackName == null) {
-                setTurnRadarRight(360);
-            }
+            if (trackName == null) setTurnRadarRight(360);
             execute();
         }
     }
@@ -91,37 +95,53 @@ public class BT_7274 extends AdvancedRobot {
             closestDistance = e.getDistance();
             lastScanTime = getTime();
 
-            // 1. CARREGA O MAPA E ATUALIZA O PERFIL
             EnemyData data = enemyMap.getOrDefault(e.getName(), new EnemyData());
             data.updateStats(e.getVelocity(), e.getHeadingRadians(), e.getDistance());
+
+            double absBearing = getHeadingRadians() + e.getBearingRadians();
+            double ex = getX() + Math.sin(absBearing) * e.getDistance();
+            double ey = getY() + Math.cos(absBearing) * e.getDistance();
+            int lateralDirection = (e.getVelocity() * Math.sin(e.getHeadingRadians() - absBearing) >= 0) ? 1 : -1;
+
+            // 1. GFT: MEDIR O ERRO DO ARMA NOS TIROS ANTERIORES
+            for (int i = 0; i < activeWaves.size(); i++) {
+                Wave w = activeWaves.get(i);
+                double distToWave = (getTime() - w.fireTime) * w.bulletSpeed;
+                
+                if (distToWave > Point2D.distance(w.startX, w.startY, ex, ey) - 18) {
+                    if (w.enemyName.equals(e.getName())) {
+                        double actualAngle = Math.atan2(ex - w.startX, ey - w.startY);
+                        
+                        // Diferença entre onde o inimigo realmente foi e onde o ARMA previu que ele iria
+                        double error = Utils.normalRelativeAngle(actualAngle - w.armaPredictedAngle) * w.direction;
+                        double maxEscapeAngle = Math.asin(8.0 / w.bulletSpeed);
+                        
+                        double factor = error / maxEscapeAngle;
+                        int index = (int) Math.round((factor * 15) + 15);
+                        index = Math.max(0, Math.min(30, index)); 
+                        
+                        data.armaErrorBins[index]++; 
+                    }
+                    activeWaves.remove(i);
+                    i--; 
+                }
+            }
 
             // 2. ARIMA DODGING
             double energyDrop = lastEnemyEnergy - e.getEnergy();
             if (energyDrop > 0 && energyDrop <= 3.0) {
                 data.recordShot(e.getBearingRadians());
-                if (Math.abs(data.predictNextShotAngle()) < 0.3) { 
-                    moveDirection *= -1; 
-                }
+                if (Math.abs(data.predictNextShotAngle()) < 0.3) moveDirection *= -1; 
             }
             lastEnemyEnergy = e.getEnergy();
 
             // 3. RADAR LOCK
-            double absBearing = getHeadingRadians() + e.getBearingRadians();
             setTurnRadarRightRadians(Utils.normalRelativeAngle(absBearing - getRadarHeadingRadians()) * 2);
 
-            // 4. MOVIMENTAÇÃO DINÂMICA (O Cérebro Tático)
-            double desiredDist = 50;  // Padrão: Agressivo
-            double aggression = 0.005;
-
-            // Se o mapa diz que ele é um Clinger, a estratégia muda completamente
-            if (data.isClinger) {
-                desiredDist = 200; // Mantém o contato a longa distância
-                aggression = 0.02; // Curva de fuga forte caso ele tente se aproximar
-            } else if (e.getDistance() < 30) {
-                // Reflexo de Sobrevivência (Caso um bot normal nos surpreenda)
-                desiredDist = 90;
-                aggression = 0.02;
-            }
+            // 4. MOVIMENTAÇÃO: ORBITAL + ANTI-CLINGER
+            double desiredDist = data.isClinger ? 200 : 50;
+            double aggression = (data.isClinger || e.getDistance() < 30) ? 0.02 : 0.005;
+            if (!data.isClinger && e.getDistance() < 30) desiredDist = 90;
 
             double distError = e.getDistance() - desiredDist;
             double turnAngle = e.getBearingRadians() + (Math.PI / 2) - (distError * aggression * moveDirection);
@@ -129,10 +149,11 @@ public class BT_7274 extends AdvancedRobot {
             setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
             setAhead(150 * moveDirection);
 
-            // 5. MIRA PREDITIVA ARMA
+            // 5. MIRA HÍBRIDA (ARMA Base + GFT Error Factor)
             double firePower = Math.min(3.0, 400.0 / e.getDistance());
             double bulletSpeed = 20 - (3 * firePower);
             
+            // Passo A: Simulação ARMA (Previsão Matemática)
             double predX = getX() + Math.sin(absBearing) * e.getDistance();
             double predY = getY() + Math.cos(absBearing) * e.getDistance();
             double simHeading = e.getHeadingRadians();
@@ -140,24 +161,44 @@ public class BT_7274 extends AdvancedRobot {
             for (int i = 0; i < 100; i++) {
                 double time = Math.hypot(getX() - predX, getY() - predY) / bulletSpeed;
                 if (i >= time) break;
-
                 simHeading += data.avgHeadingChange;
                 predX += Math.sin(simHeading) * data.avgVelocity;
                 predY += Math.cos(simHeading) * data.avgVelocity;
-
                 predX = Math.max(18, Math.min(getBattleFieldWidth() - 18, predX));
                 predY = Math.max(18, Math.min(getBattleFieldHeight() - 18, predY));
             }
+            double baseArmaAngle = Math.atan2(predX - getX(), predY - getY());
 
-            double finalAngle = Math.atan2(predX - getX(), predY - getY());
+            // Passo B: Calibração GFT (Aprendizado de Máquina)
+            int bestIndex = 15; // Começa assumindo que o ARMA está perfeitamente certo
+            for (int i = 0; i < 31; i++) {
+                if (data.armaErrorBins[i] > data.armaErrorBins[bestIndex]) {
+                    bestIndex = i;
+                }
+            }
+            
+            double maxEscapeAngle = Math.asin(8.0 / bulletSpeed);
+            double bestErrorOffset = ((double)(bestIndex - 15) / 15.0) * maxEscapeAngle;
+            
+            // Passo C: Aplica o offset de erro à previsão base do ARMA
+            double finalAngle = baseArmaAngle + (bestErrorOffset * lateralDirection);
             double gunTurn = Utils.normalRelativeAngle(finalAngle - getGunHeadingRadians());
             setTurnGunRightRadians(gunTurn);
 
             if (getGunHeat() == 0 && Math.abs(gunTurn) < 0.1) {
                 setFire(firePower);
+                
+                // Registra o tiro para treinar o GFT
+                Wave w = new Wave();
+                w.startX = getX(); w.startY = getY();
+                w.fireTime = getTime();
+                w.bulletSpeed = bulletSpeed;
+                w.armaPredictedAngle = baseArmaAngle; // Salva o que o ARMA previu
+                w.direction = lateralDirection;
+                w.enemyName = e.getName();
+                activeWaves.add(w);
             }
             
-            // Salva as atualizações no mapa
             enemyMap.put(e.getName(), data);
         }
     }
@@ -168,8 +209,6 @@ public class BT_7274 extends AdvancedRobot {
 
     public void onHitRobot(HitRobotEvent e) {
         moveDirection *= -1;
-        
-        // Se um robô tiver um comportamento suspeito como clinger, ele ganha o título de Clinger instantaneamente
         EnemyData data = enemyMap.getOrDefault(e.getName(), new EnemyData());
         data.isClinger = true;
         enemyMap.put(e.getName(), data);
