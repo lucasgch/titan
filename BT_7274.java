@@ -1,130 +1,131 @@
 package sample;
 
-import robocode.AdvancedRobot;
-import robocode.HitWallEvent;
-import robocode.RobotDeathEvent;
-import robocode.ScannedRobotEvent;
+import robocode.*;
 import robocode.util.Utils;
 import java.awt.Color;
+import java.util.*;
 
-/**
- * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * - Radar Lock: Mantém o foco total no inimigo para atualizações em tempo real.
- * - Orbit 50px: Mantém distância de 50px orbitando o alvo (Strafing).
- * - Movimentação Aleatória: Muda de direção para confundir o inimigo.
- * - Modo Sobrevivência: Fuga pelas paredes e Mira Preditiva em vida baixa.
- */
 public class BT_7274 extends AdvancedRobot {
 
+    // Memória de longo prazo (Persiste entre rounds)
+    private static final Map<String, EnemyProfile> enemyDatabase = new HashMap<>();
+    
     String trackName = null;
     double closestDistance = 10000;
     long lastScanTime = 0;
-    
     boolean lowHealthMode = false;
-    int moveDirection = 1; // 1 para frente, -1 para trás
+    int moveDirection = 1;
+
+    // Perfil Avançado com Pesos Exponenciais
+    static class EnemyProfile {
+        double avgVelocity = 0;
+        double avgHeadingChange = 0;
+        double lastHeading = 0;
+        double weight = 0.7; // Fator de aprendizado (0.7 = 70% novo, 30% antigo)
+
+        void update(double v, double h) {
+            double hChange = Utils.normalRelativeAngle(h - lastHeading);
+            
+            // Média Móvel Exponencial (mais sofisticado que média simples)
+            avgVelocity = (v * weight) + (avgVelocity * (1 - weight));
+            avgHeadingChange = (hChange * weight) + (avgHeadingChange * (1 - weight));
+            
+            lastHeading = h;
+        }
+    }
 
     public void run() {
-        // Cores Vanguard-class
         setBodyColor(new Color(50, 70, 50));
         setGunColor(new Color(200, 100, 0));
         setRadarColor(new Color(50, 50, 50));
         setScanColor(Color.cyan);
         setBulletColor(Color.orange);
 
-        // Desacopla as peças para movimento independente
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
 
         while (true) {
-            // Se não tiver alvo, gira o radar para procurar
-            if (trackName == null) {
-                setTurnRadarRight(360);
-            }
-
-            // Ativa Sobrevivência se a vida estiver crítica
-            if (getEnergy() <= 10 && !lowHealthMode) {
-                lowHealthMode = true;
-                out.println("Alerta: Protocolo de sobrevivência ativado!");
-            }
-
+            if (trackName == null) setTurnRadarRight(360);
+            if (getEnergy() <= 10 && !lowHealthMode) lowHealthMode = true;
             execute();
         }
     }
 
     public void onScannedRobot(ScannedRobotEvent e) {
-        // Reset de distância se o escaneamento estiver velho
-        if (getTime() - lastScanTime > 5) {
-            closestDistance = 10000;
-        }
+        if (getTime() - lastScanTime > 5) closestDistance = 10000;
 
-        // Foca no alvo mais próximo
         if (trackName == null || e.getName().equals(trackName) || e.getDistance() < closestDistance) {
             trackName = e.getName();
             closestDistance = e.getDistance();
             lastScanTime = getTime();
 
-            // 1. RADAR LOCK (Trava o radar no inimigo)
-            // Calcula o ângulo absoluto do inimigo
-            double absoluteBearing = getHeadingRadians() + e.getBearingRadians();
-            // Faz o radar virar exatamente para onde o inimigo está, com um pequeno extra (2.0) para não perder o foco
-            double radarTurn = Utils.normalRelativeAngle(absoluteBearing - getRadarHeadingRadians());
-            setTurnRadarRightRadians(radarTurn * 2.0);
+            // Atualiza Perfil do Inimigo
+            EnemyProfile profile = enemyDatabase.getOrDefault(e.getName(), new EnemyProfile());
+            profile.update(e.getVelocity(), e.getHeadingRadians());
+            enemyDatabase.put(e.getName(), profile);
 
-            // 2. MOVIMENTAÇÃO (Orbital Strafing a 50px)
+            // 1. Radar Lock de Alta Precisão
+            double absBearing = getHeadingRadians() + e.getBearingRadians();
+            setTurnRadarRightRadians(Utils.normalRelativeAngle(absBearing - getRadarHeadingRadians()) * 2);
+
+            // 2. Movimentação Orbital (50px) com Anti-Colisão
             if (!lowHealthMode) {
-                // 5% de chance de inverter a marcha
-                if (Math.random() < 0.05) { moveDirection *= -1; }
-
-                double distanceError = e.getDistance() - 50;
-                double approachAngle = distanceError * 0.005; // Ajuste suave de aproximação
-                
-                // Ângulo de 90 graus em relação ao inimigo + ajuste de distância
-                double turnAngle = e.getBearingRadians() + (Math.PI / 2) - (approachAngle * moveDirection);
-                
+                if (Math.random() < 0.04) moveDirection *= -1;
+                double distError = e.getDistance() - 50;
+                // Quanto mais perto, mais perpendicular o robô tenta ficar
+                double turnAngle = e.getBearingRadians() + (Math.PI / 2) - (distError * 0.006 * moveDirection);
                 setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
-                setAhead(150 * moveDirection);
+                setAhead(100 * moveDirection);
             }
 
-            // 3. MIRA (Preditiva em vida baixa, direta em vida normal)
+            // 3. MIRA PREDITIVA ITERATIVA (ESTILO ARMA)
             double firePower = Math.min(3, 400 / e.getDistance());
-            double gunTurn;
+            double bulletSpeed = 20 - (3 * firePower);
+            
+            // Variáveis de simulação
+            double predictedX = getX() + Math.sin(absBearing) * e.getDistance();
+            double predictedY = getY() + Math.cos(absBearing) * e.getDistance();
+            double currentHeading = e.getHeadingRadians();
+            double currentVel = e.getVelocity();
+            
+            // Loop Iterativo: Simula o trajeto da bala e do robô ao mesmo tempo
+            for (int i = 0; i < 100; i++) { // Max 100 ticks de previsão
+                double distToPredicted = Math.hypot(getX() - predictedX, getY() - predictedY);
+                double timeBulletNeeds = distToPredicted / bulletSpeed;
+                
+                // Se o tempo simulado alcançou o tempo que a bala leva, achamos o ponto de impacto
+                if (i >= timeBulletNeeds) break;
 
-                // Mira Preditiva Linear
-                double enemyX = getX() + e.getDistance() * Math.sin(absoluteBearing);
-                double enemyY = getY() + e.getDistance() * Math.cos(absoluteBearing);
-                double bulletSpeed = 20 - (3 * firePower);
-                double time = e.getDistance() / bulletSpeed;
+                // Aplica a tendência do modelo ARMA (Heading change médio)
+                currentHeading += profile.avgHeadingChange;
                 
-                double futureX = enemyX + Math.sin(e.getHeadingRadians()) * e.getVelocity() * time;
-                double futureY = enemyY + Math.cos(e.getHeadingRadians()) * e.getVelocity() * time;
-                
-                double bearingToFuture = Math.atan2(futureX - getX(), futureY - getY());
-                gunTurn = Utils.normalRelativeAngle(bearingToFuture - getGunHeadingRadians());
+                // Simula movimento respeitando os limites de velocidade do Robocode
+                predictedX += Math.sin(currentHeading) * currentVel;
+                predictedY += Math.cos(currentHeading) * currentVel;
+
+                // Wall Clipping: O robô não pode sair da arena
+                predictedX = Math.max(18, Math.min(getBattleFieldWidth() - 18, predictedX));
+                predictedY = Math.max(18, Math.min(getBattleFieldHeight() - 18, predictedY));
+            }
+
+            double finalAngle = Math.atan2(predictedX - getX(), predictedY - getY());
+            double gunTurn = Utils.normalRelativeAngle(finalAngle - getGunHeadingRadians());
             
             setTurnGunRightRadians(gunTurn);
 
-            // Só atira se a mira estiver minimamente alinhada
-            if (Math.abs(gunTurn) < 0.2) {
+            // Controle de disparo: Só atira se o canhão estiver quase frio e a mira quente
+            if (Math.abs(gunTurn) < 0.05 && getGunHeat() == 0) {
                 setFire(firePower);
             }
         }
     }
 
     public void onHitWall(HitWallEvent e) {
-        if (lowHealthMode) {
-            // Contorna a parede
-            setTurnLeft(90 - e.getBearing());
-            setAhead(2000); 
-        } else {
-            // Bateu? Inverte a direção do strafing
-            moveDirection *= -1;
-            setAhead(100 * moveDirection);
-        }
+        moveDirection *= -1;
     }
 
     public void onRobotDeath(RobotDeathEvent e) {
-        // Se o nosso alvo morreu, libera o radar para procurar outro
         if (e.getName().equals(trackName)) {
             trackName = null;
             closestDistance = 10000;
