@@ -5,54 +5,73 @@ import robocode.util.Utils;
 import java.awt.Color;
 import java.util.*;
 
+/**
+ * BT_7274 - "Protocolo 3: Proteger o Piloto"
+ * Versão Final: ARIMA Dodging + ARMA Aiming + 50px Orbit + Multi-round Memory.
+ */
 public class BT_7274 extends AdvancedRobot {
 
-    // Memória de longo prazo (Persiste entre rounds)
-    private static final Map<String, EnemyProfile> enemyDatabase = new HashMap<>();
+    // Memória Estática: persiste entre os rounds da mesma partida
+    private static final Map<String, EnemyData> enemyMap = new HashMap<>();
     
-    String trackName = null;
-    double closestDistance = 10000;
-    long lastScanTime = 0;
-    boolean lowHealthMode = false;
-    int moveDirection = 1;
+    private String trackName = null;
+    private double closestDistance = 10000;
+    private long lastScanTime = 0;
+    private boolean lowHealthMode = false;
+    private int moveDirection = 1;
+    private double lastEnemyEnergy = 100;
 
-    // Perfil Avançado com Pesos Exponenciais
-    static class EnemyProfile {
+    // --- CLASSE DE DADOS (MODELOS ARIMA/ARMA) ---
+    static class EnemyData {
         double avgVelocity = 0;
         double avgHeadingChange = 0;
         double lastHeading = 0;
-        double weight = 0.7; // Fator de aprendizado (0.7 = 70% novo, 30% antigo)
+        List<Double> shotBearings = new ArrayList<>(); 
 
-        void update(double v, double h) {
+        void updateStats(double v, double h) {
             double hChange = Utils.normalRelativeAngle(h - lastHeading);
-            
-            // Média Móvel Exponencial (mais sofisticado que média simples)
-            avgVelocity = (v * weight) + (avgVelocity * (1 - weight));
-            avgHeadingChange = (hChange * weight) + (avgHeadingChange * (1 - weight));
-            
+            // Média Móvel Exponencial (EMA) para o modelo ARMA
+            avgVelocity = (v * 0.7) + (avgVelocity * 0.3);
+            avgHeadingChange = (hChange * 0.7) + (avgHeadingChange * 0.3);
             lastHeading = h;
+        }
+
+        void recordShot(double bearing) {
+            shotBearings.add(bearing);
+            if (shotBearings.size() > 20) shotBearings.remove(0);
+        }
+        
+        double predictNextShotAngle() {
+            if (shotBearings.size() < 3) return 0;
+            // Lógica ARIMA: Diferença integrada para prever tendência de erro
+            double lastDiff = shotBearings.get(shotBearings.size()-1) - shotBearings.get(shotBearings.size()-2);
+            return shotBearings.get(shotBearings.size()-1) + lastDiff;
         }
     }
 
     public void run() {
+        // Cores Vanguard-class
         setBodyColor(new Color(50, 70, 50));
         setGunColor(new Color(200, 100, 0));
         setRadarColor(new Color(50, 50, 50));
         setScanColor(Color.cyan);
         setBulletColor(Color.orange);
 
+        // Desacoplamento total de componentes
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
         setAdjustRadarForRobotTurn(true);
 
         while (true) {
-            if (trackName == null) setTurnRadarRight(360);
-            if (getEnergy() <= 10 && !lowHealthMode) lowHealthMode = true;
+            if (trackName == null) {
+                setTurnRadarRight(360);
+            }
             execute();
         }
     }
 
     public void onScannedRobot(ScannedRobotEvent e) {
+        // Controle de foco de alvo
         if (getTime() - lastScanTime > 5) closestDistance = 10000;
 
         if (trackName == null || e.getName().equals(trackName) || e.getDistance() < closestDistance) {
@@ -60,69 +79,77 @@ public class BT_7274 extends AdvancedRobot {
             closestDistance = e.getDistance();
             lastScanTime = getTime();
 
-            // Atualiza Perfil do Inimigo
-            EnemyProfile profile = enemyDatabase.getOrDefault(e.getName(), new EnemyProfile());
-            profile.update(e.getVelocity(), e.getHeadingRadians());
-            enemyDatabase.put(e.getName(), profile);
+            // Recupera ou cria perfil do inimigo
+            EnemyData data = enemyMap.getOrDefault(e.getName(), new EnemyData());
+            data.updateStats(e.getVelocity(), e.getHeadingRadians());
 
-            // 1. Radar Lock de Alta Precisão
+            // 1. ARIMA DODGING (Esquiva Baseada em Energia)
+            double energyDrop = lastEnemyEnergy - e.getEnergy();
+            if (energyDrop > 0 && energyDrop <= 3.0) {
+                data.recordShot(e.getBearingRadians());
+                double predictedShot = data.predictNextShotAngle();
+                // Se o tiro predito for perigoso, invertemos o curso
+                if (Math.abs(predictedShot) < 0.3) { 
+                    moveDirection *= -1; 
+                }
+            }
+            lastEnemyEnergy = e.getEnergy();
+
+            // 2. RADAR LOCK
             double absBearing = getHeadingRadians() + e.getBearingRadians();
             setTurnRadarRightRadians(Utils.normalRelativeAngle(absBearing - getRadarHeadingRadians()) * 2);
 
-            // 2. Movimentação Orbital (50px) com Anti-Colisão
+            // 3. MOVIMENTAÇÃO (Orbital 50px)
+            if (getEnergy() <= 10) lowHealthMode = true;
+            
             if (!lowHealthMode) {
-                if (Math.random() < 0.04) moveDirection *= -1;
                 double distError = e.getDistance() - 50;
-                // Quanto mais perto, mais perpendicular o robô tenta ficar
-                double turnAngle = e.getBearingRadians() + (Math.PI / 2) - (distError * 0.006 * moveDirection);
+                // Cálculo perpendicular para orbitar e manter distância
+                double turnAngle = e.getBearingRadians() + (Math.PI / 2) - (distError * 0.005 * moveDirection);
                 setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
+                setAhead(100 * moveDirection);
+            } else {
+                // Modo sobrevivência: Movimento evasivo simples contra paredes
                 setAhead(100 * moveDirection);
             }
 
-            // 3. MIRA PREDITIVA ITERATIVA (ESTILO ARMA)
-            double firePower = Math.min(3, 400 / e.getDistance());
+            // 4. MIRA PREDITIVA SOFISTICADA (ARMA + Iteração de tempo)
+            double firePower = Math.min(3.0, 400.0 / e.getDistance());
             double bulletSpeed = 20 - (3 * firePower);
             
-            // Variáveis de simulação
-            double predictedX = getX() + Math.sin(absBearing) * e.getDistance();
-            double predictedY = getY() + Math.cos(absBearing) * e.getDistance();
-            double currentHeading = e.getHeadingRadians();
-            double currentVel = e.getVelocity();
+            double predX = getX() + Math.sin(absBearing) * e.getDistance();
+            double predY = getY() + Math.cos(absBearing) * e.getDistance();
+            double simHeading = e.getHeadingRadians();
             
-            // Loop Iterativo: Simula o trajeto da bala e do robô ao mesmo tempo
-            for (int i = 0; i < 100; i++) { // Max 100 ticks de previsão
-                double distToPredicted = Math.hypot(getX() - predictedX, getY() - predictedY);
-                double timeBulletNeeds = distToPredicted / bulletSpeed;
-                
-                // Se o tempo simulado alcançou o tempo que a bala leva, achamos o ponto de impacto
-                if (i >= timeBulletNeeds) break;
+            // Simulação de trajetória tick-a-tick
+            for (int i = 0; i < 100; i++) {
+                double time = Math.hypot(getX() - predX, getY() - predY) / bulletSpeed;
+                if (i >= time) break;
 
-                // Aplica a tendência do modelo ARMA (Heading change médio)
-                currentHeading += profile.avgHeadingChange;
-                
-                // Simula movimento respeitando os limites de velocidade do Robocode
-                predictedX += Math.sin(currentHeading) * currentVel;
-                predictedY += Math.cos(currentHeading) * currentVel;
+                simHeading += data.avgHeadingChange;
+                predX += Math.sin(simHeading) * data.avgVelocity;
+                predY += Math.cos(simHeading) * data.avgVelocity;
 
-                // Wall Clipping: O robô não pode sair da arena
-                predictedX = Math.max(18, Math.min(getBattleFieldWidth() - 18, predictedX));
-                predictedY = Math.max(18, Math.min(getBattleFieldHeight() - 18, predictedY));
+                // Limites da arena (Wall Clipping)
+                predX = Math.max(18, Math.min(getBattleFieldWidth() - 18, predX));
+                predY = Math.max(18, Math.min(getBattleFieldHeight() - 18, predY));
             }
 
-            double finalAngle = Math.atan2(predictedX - getX(), predictedY - getY());
+            double finalAngle = Math.atan2(predX - getX(), predY - getY());
             double gunTurn = Utils.normalRelativeAngle(finalAngle - getGunHeadingRadians());
-            
             setTurnGunRightRadians(gunTurn);
 
-            // Controle de disparo: Só atira se o canhão estiver quase frio e a mira quente
-            if (Math.abs(gunTurn) < 0.05 && getGunHeat() == 0) {
+            // Disparo de Precisão
+            if (getGunHeat() == 0 && Math.abs(gunTurn) < 0.1) {
                 setFire(firePower);
             }
+            
+            enemyMap.put(e.getName(), data);
         }
     }
 
     public void onHitWall(HitWallEvent e) {
-        moveDirection *= -1;
+        moveDirection *= -1; // Inverte direção ao bater na parede
     }
 
     public void onRobotDeath(RobotDeathEvent e) {
