@@ -8,7 +8,7 @@ import java.util.*;
 
 /**
  * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * Versão Definitiva: ARMA Base + GFT Error Correction + Anti-Clinger + Mira Radial.
+ * Versão Definitiva: ARMA Base + GFT Error Correction + Anti-Clinger.
  */
 public class BT_7274 extends AdvancedRobot {
 
@@ -112,6 +112,7 @@ public class BT_7274 extends AdvancedRobot {
                     if (w.enemyName.equals(e.getName())) {
                         double actualAngle = Math.atan2(ex - w.startX, ey - w.startY);
                         
+                        // Diferença entre onde o inimigo realmente foi e onde o ARMA previu que ele iria
                         double error = Utils.normalRelativeAngle(actualAngle - w.armaPredictedAngle) * w.direction;
                         double maxEscapeAngle = Math.asin(8.0 / w.bulletSpeed);
                         
@@ -148,42 +149,28 @@ public class BT_7274 extends AdvancedRobot {
             setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
             setAhead(150 * moveDirection);
 
-            // 5. MIRA HÍBRIDA (ARMA Base + GFT Error Factor + Compensação Radial)
+            // 5. MIRA HÍBRIDA (ARMA Base + GFT Error Factor)
             double firePower = Math.min(3.0, 400.0 / e.getDistance());
             double bulletSpeed = 20 - (3 * firePower);
             
-            // Passo A: Simulação ARMA com Previsão do PRÓPRIO Movimento
-            double predX = ex; 
-            double predY = ey;
+            // Passo A: Simulação ARMA (Previsão Matemática)
+            double predX = getX() + Math.sin(absBearing) * e.getDistance();
+            double predY = getY() + Math.cos(absBearing) * e.getDistance();
             double simHeading = e.getHeadingRadians();
             
-            // Calcula o lag temporal do canhão
-            double currentGunTurn = Utils.normalRelativeAngle(absBearing - getGunHeadingRadians());
-            double gunTurnTicks = Math.abs(currentGunTurn) / robocode.Rules.GUN_TURN_RATE_RADIANS;
-
-            // Calcula onde NÓS vamos estar quando o canhão estiver pronto
-            double myPredX = getX() + Math.sin(getHeadingRadians()) * getVelocity() * gunTurnTicks;
-            double myPredY = getY() + Math.cos(getHeadingRadians()) * getVelocity() * gunTurnTicks;
-
             for (int i = 0; i < 100; i++) {
-                // Mede a distância a partir da NOSSA posição futura
-                double time = Math.hypot(myPredX - predX, myPredY - predY) / bulletSpeed;
-                
-                // Exige que a simulação aguarde o tempo de voo da bala + tempo de giro do canhão
-                if (i >= time + gunTurnTicks) break;
-                
+                double time = Math.hypot(getX() - predX, getY() - predY) / bulletSpeed;
+                if (i >= time) break;
                 simHeading += data.avgHeadingChange;
                 predX += Math.sin(simHeading) * data.avgVelocity;
                 predY += Math.cos(simHeading) * data.avgVelocity;
                 predX = Math.max(18, Math.min(getBattleFieldWidth() - 18, predX));
                 predY = Math.max(18, Math.min(getBattleFieldHeight() - 18, predY));
             }
-            
-            // Base do tiro parte do nosso "eu do futuro"
-            double baseArmaAngle = Math.atan2(predX - myPredX, predY - myPredY);
+            double baseArmaAngle = Math.atan2(predX - getX(), predY - getY());
 
             // Passo B: Calibração GFT (Aprendizado de Máquina)
-            int bestIndex = 15; 
+            int bestIndex = 15; // Começa assumindo que o ARMA está perfeitamente certo
             for (int i = 0; i < 31; i++) {
                 if (data.armaErrorBins[i] > data.armaErrorBins[bestIndex]) {
                     bestIndex = i;
@@ -198,17 +185,15 @@ public class BT_7274 extends AdvancedRobot {
             double gunTurn = Utils.normalRelativeAngle(finalAngle - getGunHeadingRadians());
             setTurnGunRightRadians(gunTurn);
 
-            // Gatilho: Margem dinâmica adaptada para alvos mais distantes
-            double dynamicMargin = Math.max(Math.atan(36.0 / e.getDistance()), 0.05);
-
-            if (getGunHeat() == 0 && Math.abs(gunTurn) <= dynamicMargin) {
+            if (getGunHeat() == 0 && Math.abs(gunTurn) < 0.1) {
                 setFire(firePower);
                 
+                // Registra o tiro para treinar o GFT
                 Wave w = new Wave();
                 w.startX = getX(); w.startY = getY();
                 w.fireTime = getTime();
                 w.bulletSpeed = bulletSpeed;
-                w.armaPredictedAngle = baseArmaAngle; 
+                w.armaPredictedAngle = baseArmaAngle; // Salva o que o ARMA previu
                 w.direction = lateralDirection;
                 w.enemyName = e.getName();
                 activeWaves.add(w);
