@@ -1,0 +1,12 @@
+# Ignorar arquivos compilados
+*.class
+
+# Ignorar pacotes
+*.jar
+
+# Ignorar pastas de IDEs
+.idea/
+.settings/
+.project
+.classpath
+bin/
