@@ -11,6 +11,10 @@ import robocode.util.Utils;
 /**
  * BT-7274 (Núcleo Original + Movimentação MRM + Fuga + Trajetória + Caçador + Rank + Anti-Surf + Shadowing)
  * Estratégia Híbrida MIRA EXTREMA (Kernel Density 47-Bins) + Smart Fallback (Tríplice Auxiliar)
+ * NOVO: Defesa Visit Count Surfing + SISTEMA MERITOCRÁTICO DE RECOMPENSA/PUNIÇÃO
+ * NOVO: Votação de Mira ARMA e ARIMA com adaptação de processamento (Shadowing resolvido)
+ * NOVO: Scanner Narrow Lock Definitivo (Independência de chassi e fallback corrigido)
+ * NOVO: Heurística Anti-Básico (Órbita forçada + ARMA/ARIMA Override) - APENAS COMPORTAMENTAL
  */
 public class BT_7274 extends AdvancedRobot {
     
@@ -40,6 +44,20 @@ public class BT_7274 extends AdvancedRobot {
     private static double direcaoLateral;
     private static double velocidadeInimigoAnterior;
     private Movimento_1VS1 movimento1VS1;
+    
+    // --- VARIÁVEIS DO VISIT COUNT SURFING E SISTEMA MERITOCRÁTICO ---
+    static double energiaInimigoAnterior_1v1 = 100;
+    static int[] estatisticasSurfing = new int[47];
+    ArrayList<OndaInimiga> ondasInimigas = new ArrayList<>();
+    static boolean habilitarSurfing = true;
+    
+    // Variáveis do Sistema de Recompensa/Punição
+    static double confiancaSurfing = 1.0;
+    static double confiancaMRM = 1.0;
+    double ultimoRiscoSurfingAvaliado = 0;
+    double ultimoRiscoMRMAvaliado = 0;
+    double riscoSurfingAlvoAtual = 0;
+    double riscoMRMAlvoAtual = 0;
     
     // Inicializador de instâncias
     {
@@ -74,7 +92,14 @@ public class BT_7274 extends AdvancedRobot {
         public double ultimaVelocidadeLateral = 0.0;
         public boolean classificadoComoSurfer = false;
         
+        // Flag para identificar bots de movimentação simplória/previsível
+        public boolean classificadoComoBasico = false;
+        
         public double pesoAprendizadoDinâmico = 1.0;
+        
+        // Histórico para Análise de Séries Temporais (ARMA/ARIMA)
+        public LinkedList<java.lang.Double> historicoVelocidade = new LinkedList<>();
+        public LinkedList<java.lang.Double> historicoDeltaDirecao = new LinkedList<>();
     }
     
     class TiroInimigo {
@@ -110,7 +135,140 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     // =========================================================
-    // LÓGICA DE MOVIMENTO 1 VS 1
+    // VISIT COUNT SURFING (WAVE SURFING DEFENSIVO)
+    // =========================================================
+    class OndaInimiga {
+        Point2D.Double origem;
+        long tempoDisparo;
+        double velocidadeBala;
+        double anguloDireto;
+        double direcaoLateral;
+        
+        static final int BINS_SURF = 47;
+        static final int BIN_CENTRO = 23;
+
+        public boolean checarAcerto(Point2D.Double posicaoRobo, long tempoAtual) {
+            double distanciaPercorrida = (tempoAtual - tempoDisparo) * velocidadeBala;
+            if (distanciaPercorrida > origem.distance(posicaoRobo) - 18) {
+                int bin = obterBin(posicaoRobo);
+                estatisticasSurfing[bin]++; 
+                return true;
+            }
+            return false;
+        }
+
+        public int obterBin(Point2D.Double alvoPos) {
+            double anguloDesejado = Utilitario.anguloAbsoluto(origem, alvoPos);
+            double offset = Utils.normalRelativeAngle(anguloDesejado - anguloDireto);
+            double maxEscapeAngle = Math.asin(8.0 / velocidadeBala);
+            int bin = (int) Math.round((offset / (direcaoLateral * (maxEscapeAngle / BIN_CENTRO))) + BIN_CENTRO);
+            return (int) Utilitario.limitar(bin, 0, BINS_SURF - 1);
+        }
+    }
+
+    public void executarSurfing() {
+        if (ondasInimigas.isEmpty()) return;
+
+        meuRobo.x = getX();
+        meuRobo.y = getY();
+        meuRobo.direcao = getHeadingRadians();
+        meuRobo.velocidade = getVelocity();
+
+        OndaInimiga ondaMaisProxima = null;
+        double menorDistancia = Double.MAX_VALUE;
+
+        for (int i = 0; i < ondasInimigas.size(); i++) {
+            OndaInimiga onda = ondasInimigas.get(i);
+            if (onda.checarAcerto(meuRobo, getTime())) {
+                confiancaSurfing = Math.min(3.0, confiancaSurfing + 0.05);
+                confiancaMRM = Math.min(3.0, confiancaMRM + 0.05);
+                ondasInimigas.remove(i);
+                i--;
+                continue;
+            }
+            double distVoo = (getTime() - onda.tempoDisparo) * onda.velocidadeBala;
+            double distRestante = onda.origem.distance(meuRobo) - distVoo;
+            if (distRestante > 0 && distRestante < menorDistancia) {
+                menorDistancia = distRestante;
+                ondaMaisProxima = onda;
+            }
+        }
+
+        boolean conflitoMotores = false; 
+        
+        if (conflitoMotores && ondaMaisProxima != null) {
+            double riscoFrente = preverRiscoMovimento(ondaMaisProxima, 1);
+            double riscoTras = preverRiscoMovimento(ondaMaisProxima, -1);
+            double riscoParado = preverRiscoMovimento(ondaMaisProxima, 0);
+
+            int direcaoSegura = 1;
+            if (riscoTras < riscoFrente && riscoTras <= riscoParado) direcaoSegura = -1;
+            else if (riscoParado < riscoFrente && riscoParado < riscoTras) direcaoSegura = 0;
+
+            if (direcaoSegura != 0) {
+                double tempoTentativa = 0;
+                Point2D.Double destinoRobo = null;
+                Rectangle2D areaEvasao = new Rectangle2D.Double(MARGEM_PAREDE, MARGEM_PAREDE, campoBatalha.width - MARGEM_PAREDE * 2, campoBatalha.height - MARGEM_PAREDE * 2);
+
+                while (!areaEvasao.contains(destinoRobo = (Point2D.Double) Utilitario.projetar(
+                        ondaMaisProxima.origem, 
+                        Utilitario.anguloAbsoluto(ondaMaisProxima.origem, meuRobo) + (Math.PI / 2 + tempoTentativa / 100.0) * direcaoSegura, 
+                        ondaMaisProxima.origem.distance(meuRobo))) 
+                        && tempoTentativa < 125) {
+                    tempoTentativa++;
+                }
+                
+                double anguloEvasao = Utilitario.anguloAbsoluto(meuRobo, destinoRobo) - getHeadingRadians();
+                
+                if (Math.cos(anguloEvasao) < 0) {
+                    anguloEvasao += Math.PI;
+                    direcaoSegura *= -1;
+                }
+                
+                setMaxVelocity(8);
+                setTurnRightRadians(Utils.normalRelativeAngle(anguloEvasao));
+                setAhead(100 * direcaoSegura);
+            } else {
+                setMaxVelocity(0); 
+            }
+        }
+    }
+
+    private double preverRiscoMovimento(OndaInimiga onda, int direcao) {
+        Point2D.Double posPrevista = (Point2D.Double) meuRobo.clone();
+        double velocidadeSimulada = getVelocity();
+        double direcaoSimulada = getHeadingRadians();
+        
+        long tempoVoo = (long) ((onda.origem.distance(meuRobo) - ((getTime() - onda.tempoDisparo) * onda.velocidadeBala)) / onda.velocidadeBala);
+
+        for (int i = 0; i < Math.max(1, tempoVoo); i++) {
+            if (direcao == 0) {
+                velocidadeSimulada = Math.abs(velocidadeSimulada) > 2 ? velocidadeSimulada * 0.5 : 0; 
+            } else {
+                velocidadeSimulada = Utilitario.limitar(velocidadeSimulada + (direcao > 0 ? 1 : -1), -8, 8);
+            }
+            
+            direcaoSimulada = Utilitario.anguloAbsoluto(onda.origem, posPrevista) + (Math.PI/2) * (direcao == 0 ? 1 : direcao);
+            
+            posPrevista.x += Math.sin(direcaoSimulada) * velocidadeSimulada;
+            posPrevista.y += Math.cos(direcaoSimulada) * velocidadeSimulada;
+
+            posPrevista.x = Utilitario.limitar(posPrevista.x, MARGEM_PAREDE, campoBatalha.width - MARGEM_PAREDE);
+            posPrevista.y = Utilitario.limitar(posPrevista.y, MARGEM_PAREDE, campoBatalha.height - MARGEM_PAREDE);
+        }
+
+        int bin = onda.obterBin(posPrevista);
+        
+        double risco = 0;
+        for (int i = -2; i <= 2; i++) {
+            int binAvaliado = (int) Utilitario.limitar(bin + i, 0, OndaInimiga.BINS_SURF - 1);
+            risco += estatisticasSurfing[binAvaliado] * (1.0 / (Math.abs(i) + 1));
+        }
+        return risco;
+    }
+
+    // =========================================================
+    // LÓGICA DE MOVIMENTO 1 VS 1 (EVASÃO LEGADA FALLBACK)
     // =========================================================
     class Movimento_1VS1 {
         private static final double LARGURA_CAMPO = 800;
@@ -162,7 +320,7 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     // =========================================================
-    // LÓGICA DE TIRO 1 VS 1 (GUESSFACTOR + KERNEL + AUXILIARES)
+    // LÓGICA DE TIRO 1 VS 1 (GUESSFACTOR + KERNEL + AUXILIARES + ARMA + ARIMA)
     // =========================================================
     static class Onda extends Condition {
         static Point2D posicaoAlvo;
@@ -185,8 +343,9 @@ public class BT_7274 extends AdvancedRobot {
         private final AdvancedRobot robô;
         public double pesoImpacto = 5.0; 
         
-        // Variável adicionada para o Voto Auxiliar da Média (Smart Fallback)
         public int binVotoAuxiliar = -1; 
+        public int binVotoARMA = -1;
+        public int binVotoARIMA = -1;
         
         Onda(AdvancedRobot _robô) {
             this.robô = _robô;
@@ -209,26 +368,20 @@ public class BT_7274 extends AdvancedRobot {
             return false;
         }
         
-        // ====================================================================
-        // NOVO: Cálculo da Tríplice Auxiliar (Direto, Linear e Circular)
-        // ====================================================================
         public void registrarMirasAuxiliares(Robo inimigo, Robo meuRobo, double tempoEstimado) {
             double inimigoX = meuRobo.x + inimigo.distancia * Math.sin(inimigo.anguloAbsolutoRadianos);
             double inimigoY = meuRobo.y + inimigo.distancia * Math.cos(inimigo.anguloAbsolutoRadianos);
             
-            // Mira 1: Tiro Direto (Head-On)
             double angulo1 = inimigo.anguloAbsolutoRadianos;
             
-            // Mira 2: Tiro Linear
             double linX = inimigoX + Math.sin(inimigo.direcao) * inimigo.velocidade * tempoEstimado;
             double linY = inimigoY + Math.cos(inimigo.direcao) * inimigo.velocidade * tempoEstimado;
             double angulo2 = Utilitario.anguloAbsoluto(meuRobo, new Point2D.Double(linX, linY));
             
-            // Mira 3: Tiro Circular
             double deltaDir = inimigo.direcao - inimigo.ultimaDirecao;
             double circX, circY;
             
-            if (Math.abs(deltaDir) < 0.00001) { // Previne divisão por zero se ele andar reto
+            if (Math.abs(deltaDir) < 0.00001) {
                 circX = linX; circY = linY;
             } else {
                 circX = inimigoX + (inimigo.velocidade / deltaDir) * (Math.cos(inimigo.direcao) - Math.cos(inimigo.direcao + deltaDir * tempoEstimado));
@@ -236,19 +389,74 @@ public class BT_7274 extends AdvancedRobot {
             }
             double angulo3 = Utilitario.anguloAbsoluto(meuRobo, new Point2D.Double(circX, circY));
             
-            // MÉDIA VETORIAL DAS 3 MIRAS (Evita o bug matemático do 360/0 graus)
             double mediaSeno = (Math.sin(angulo1) + Math.sin(angulo2) + Math.sin(angulo3)) / 3.0;
             double mediaCosseno = (Math.cos(angulo1) + Math.cos(angulo2) + Math.cos(angulo3)) / 3.0;
             double anguloMedio = Math.atan2(mediaSeno, mediaCosseno);
             
-            // Transforma o ângulo final no "Índice do Bin" do nosso Radar GuessFactor
             double offsetMedio = Utils.normalRelativeAngle(anguloMedio - angulo);
             int binMedia = (int) Math.round((offsetMedio / (direcaoLateral * LARGURA_BIN)) + BIN_CENTRAL);
             
-            // Salva como o voto auxiliar para esta onda específica
             binVotoAuxiliar = (int) Utilitario.limitar(binMedia, 0, BINS - 1);
         }
-        // ====================================================================
+
+        public void registrarMirasARMA_ARIMA(Robo inimigo, Robo meuRobo, double tempoEstimado, int qtdInimigosVivos) {
+            if (inimigo.historicoVelocidade.size() < 5) return; 
+            
+            int profundidadeMaxima = (qtdInimigosVivos > 2) ? 5 : ((qtdInimigosVivos == 2) ? 15 : 40);
+            int n = Math.min(inimigo.historicoVelocidade.size(), profundidadeMaxima);
+            
+            double iniX = meuRobo.x + inimigo.distancia * Math.sin(inimigo.anguloAbsolutoRadianos);
+            double iniY = meuRobo.y + inimigo.distancia * Math.cos(inimigo.anguloAbsolutoRadianos);
+            
+            // --- SIMULAÇÃO ARMA ---
+            double mediaVel = 0, mediaDeltaDir = 0;
+            for(int i = 0; i < n; i++) {
+                mediaVel += inimigo.historicoVelocidade.get(i);
+                mediaDeltaDir += inimigo.historicoDeltaDirecao.get(i);
+            }
+            mediaVel /= n;
+            mediaDeltaDir /= n;
+            
+            double simArmaX = iniX;
+            double simArmaY = iniY;
+            double simArmaDir = inimigo.direcao;
+            
+            for(int t = 0; t < tempoEstimado; t++) {
+                simArmaDir += mediaDeltaDir;
+                simArmaX += Math.sin(simArmaDir) * mediaVel;
+                simArmaY += Math.cos(simArmaDir) * mediaVel;
+            }
+            double anguloARMA = Utilitario.anguloAbsoluto(meuRobo, new Point2D.Double(simArmaX, simArmaY));
+            int binARMA = (int) Math.round((Utils.normalRelativeAngle(anguloARMA - angulo) / (direcaoLateral * LARGURA_BIN)) + BIN_CENTRAL);
+            binVotoARMA = (int) Utilitario.limitar(binARMA, 0, BINS - 1);
+            
+            // --- SIMULAÇÃO ARIMA ---
+            double aceleracaoMedia = 0, deltaDaDeltaDir = 0;
+            for(int i = 0; i < n - 1; i++) {
+                aceleracaoMedia += (inimigo.historicoVelocidade.get(i) - inimigo.historicoVelocidade.get(i+1));
+                deltaDaDeltaDir += (inimigo.historicoDeltaDirecao.get(i) - inimigo.historicoDeltaDirecao.get(i+1));
+            }
+            aceleracaoMedia /= Math.max(1, n - 1);
+            deltaDaDeltaDir /= Math.max(1, n - 1);
+            
+            double simArimaX = iniX;
+            double simArimaY = iniY;
+            double simArimaVel = inimigo.velocidade;
+            double simArimaDir = inimigo.direcao;
+            double simArimaDeltaDir = inimigo.direcao - inimigo.ultimaDirecao;
+            
+            for(int t = 0; t < tempoEstimado; t++) {
+                simArimaVel = Utilitario.limitar(simArimaVel + aceleracaoMedia, -8, 8); 
+                simArimaDeltaDir += deltaDaDeltaDir; 
+                simArimaDir += simArimaDeltaDir;
+                
+                simArimaX += Math.sin(simArimaDir) * simArimaVel;
+                simArimaY += Math.cos(simArimaDir) * simArimaVel;
+            }
+            double anguloARIMA = Utilitario.anguloAbsoluto(meuRobo, new Point2D.Double(simArimaX, simArimaY));
+            int binARIMA = (int) Math.round((Utils.normalRelativeAngle(anguloARIMA - angulo) / (direcaoLateral * LARGURA_BIN)) + BIN_CENTRAL);
+            binVotoARIMA = (int) Utilitario.limitar(binARIMA, 0, BINS - 1);
+        }
         
         double offsetAnguloMaisVisitado() {
             return (direcaoLateral * LARGURA_BIN) * (binMaisVisitado() - BIN_CENTRAL);
@@ -270,22 +478,27 @@ public class BT_7274 extends AdvancedRobot {
         }
         
         private int binAtual() {
-            int bin = (int) Math.round(((Utils.normalRelativeAngle(
-                Utilitario.anguloAbsoluto(posicaoCanhao, posicaoAlvo) - angulo)) /
-                (direcaoLateral * LARGURA_BIN)) + BIN_CENTRAL);
+            int bin = (int) Math.round((Utils.normalRelativeAngle(Utilitario.anguloAbsoluto(posicaoCanhao, posicaoAlvo) - angulo) / (direcaoLateral * LARGURA_BIN)) + BIN_CENTRAL);
             return (int) Utilitario.limitar(bin, 0, BINS - 1);
         }
         
         private int binMaisVisitado() {
             int maisVisitado = BIN_CENTRAL;
-            double maiorVoto = -1; // Alterado para double para aguentar votos compostos
+            double maiorVoto = -1; 
+            BT_7274 bot = (BT_7274) robô;
             
             for (int i = 0; i < BINS; i++) {
                 double votos = buffer[i];
                 
-                // NOVO: Adiciona o peso do Voto Auxiliar da Média Física
-                if (i == binVotoAuxiliar) {
-                    votos += (10.0 * pesoImpacto); 
+                if (i == binVotoAuxiliar) votos += (10.0 * pesoImpacto); 
+                
+                // Condição para ARIMA e ARMA assumirem o controle caso seja um bot básico
+                if (bot.alvo != null && bot.alvo.classificadoComoBasico) {
+                    if (i == binVotoARMA) votos += (10000.0 * pesoImpacto);
+                    if (i == binVotoARIMA) votos += (10000.0 * pesoImpacto);
+                } else {
+                    if (i == binVotoARMA) votos += (8.0 * pesoImpacto);
+                    if (i == binVotoARIMA) votos += (8.0 * pesoImpacto);
                 }
                 
                 if (votos > maiorVoto) {
@@ -329,6 +542,7 @@ public class BT_7274 extends AdvancedRobot {
         
         setAdjustGunForRobotTurn(true);
         setAdjustRadarForGunTurn(true);
+        setAdjustRadarForRobotTurn(true); 
         
         if (getOthers() > 1) {
             atualizarListaPosicoes(QUANTIDADE_PONTOS_PREVISTOS);
@@ -365,8 +579,15 @@ public class BT_7274 extends AdvancedRobot {
         else {
             direcaoLateral = 1;
             velocidadeInimigoAnterior = 0;
+            
+            setTurnRadarRightRadians(Double.POSITIVE_INFINITY); 
+            
             while (true) {
-                turnRadarRightRadians(Double.POSITIVE_INFINITY);
+                if (getRadarTurnRemaining() == 0.0) {
+                    setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
+                }
+                
+                execute();
             }
         }
     }
@@ -415,6 +636,28 @@ public class BT_7274 extends AdvancedRobot {
             inimigo.velocidade = e.getVelocity();
             inimigo.direcao = e.getHeadingRadians();
             
+            inimigo.historicoVelocidade.addFirst(inimigo.velocidade);
+            inimigo.historicoDeltaDirecao.addFirst(inimigo.direcao - inimigo.ultimaDirecao);
+            if (inimigo.historicoVelocidade.size() > 50) inimigo.historicoVelocidade.removeLast();
+            if (inimigo.historicoDeltaDirecao.size() > 50) inimigo.historicoDeltaDirecao.removeLast();
+            
+            // Heurística para classificar robôs básicos no MELEE (Clingers ou Lineares)
+            double distParedeInimigo = Math.min(
+                Math.min(inimigo.x, campoBatalha.width - inimigo.x), 
+                Math.min(inimigo.y, campoBatalha.height - inimigo.y)
+            );
+            boolean isClinger = distParedeInimigo < 60; // Gosta de colar na parede
+            boolean isLinear = inimigo.reversoesLaterais < 2 && inimigo.historicoVelocidade.size() >= 30;
+            
+            // String nomeInimigo = e.getName().toLowerCase(); // Mantido no código (comentado) para não deletar
+            
+            // DETECÇÃO APENAS POR COMPORTAMENTO (ignora a string nomeInimigo)
+            if (isClinger || isLinear) {
+                inimigo.classificadoComoBasico = true;
+            } else {
+                inimigo.classificadoComoBasico = false;
+            }
+            
             double velLateral = inimigo.velocidade * Math.sin(inimigo.direcao - (getHeadingRadians() + inimigo.anguloAbsolutoRadianos));
             if (Math.abs(velLateral) > 0.1 && Math.abs(inimigo.ultimaVelocidadeLateral) > 0.1) {
                 if (Utilitario.sinal(velLateral) != Utilitario.sinal(inimigo.ultimaVelocidadeLateral)) {
@@ -456,8 +699,32 @@ public class BT_7274 extends AdvancedRobot {
             inimigo.anguloAbsolutoRadianos = getHeadingRadians() + e.getBearingRadians();
             inimigo.distancia = e.getDistance();
             inimigo.velocidade = e.getVelocity();
-            inimigo.direcao = e.getHeadingRadians(); // Necessário para a matemática das miras
-            inimigo.ultimaDirecao = velocidadeInimigoAnterior == 0 ? inimigo.direcao : (e.getHeadingRadians() - (e.getVelocity() - velocidadeInimigoAnterior)); // Aproximação temporal
+            inimigo.direcao = e.getHeadingRadians(); 
+            inimigo.ultimaDirecao = velocidadeInimigoAnterior == 0 ? inimigo.direcao : (e.getHeadingRadians() - (e.getVelocity() - velocidadeInimigoAnterior)); 
+            
+            inimigo.setLocation(Utilitario.projetar(new Point2D.Double(getX(), getY()), inimigo.anguloAbsolutoRadianos, inimigo.distancia));
+            
+            inimigo.historicoVelocidade.addFirst(inimigo.velocidade);
+            inimigo.historicoDeltaDirecao.addFirst(inimigo.direcao - inimigo.ultimaDirecao);
+            if (inimigo.historicoVelocidade.size() > 50) inimigo.historicoVelocidade.removeLast();
+            if (inimigo.historicoDeltaDirecao.size() > 50) inimigo.historicoDeltaDirecao.removeLast();
+            
+            // Heurística para classificar robôs básicos no 1V1
+            double distParedeInimigo = Math.min(
+                Math.min(inimigo.x, campoBatalha.width - inimigo.x), 
+                Math.min(inimigo.y, campoBatalha.height - inimigo.y)
+            );
+            boolean isClinger = distParedeInimigo < 60; 
+            boolean isLinear = inimigo.reversoesLaterais < 2 && inimigo.historicoVelocidade.size() >= 30;
+            
+            // String nomeInimigo = e.getName().toLowerCase(); // Mantido no código (comentado) para não deletar
+            
+            // DETECÇÃO APENAS POR COMPORTAMENTO (ignora a string nomeInimigo)
+            if (isClinger || isLinear) {
+                inimigo.classificadoComoBasico = true;
+            } else {
+                inimigo.classificadoComoBasico = false;
+            }
             
             if (inimigo.velocidade != 0) {
                 direcaoLateral = Utilitario.sinal(inimigo.velocidade * Math.sin(e.getHeadingRadians() - inimigo.anguloAbsolutoRadianos));
@@ -465,7 +732,7 @@ public class BT_7274 extends AdvancedRobot {
                 
             Onda onda = new Onda(this);
             onda.posicaoCanhao = new Point2D.Double(getX(), getY());
-            Onda.posicaoAlvo = Utilitario.projetar(onda.posicaoCanhao, inimigo.anguloAbsolutoRadianos, inimigo.distancia);
+            Onda.posicaoAlvo = inimigo;
             onda.direcaoLateral = direcaoLateral;
             onda.definirSegmentacoes(inimigo.distancia, inimigo.velocidade, velocidadeInimigoAnterior);
             
@@ -476,7 +743,6 @@ public class BT_7274 extends AdvancedRobot {
             velocidadeInimigoAnterior = inimigo.velocidade;
             onda.angulo = inimigo.anguloAbsolutoRadianos;
             
-            // --- CÁLCULO DE POTÊNCIA ANTECIPADO (Necessário para prever o tempo de voo da bala nas Miras) ---
             POTENCIA_TIRO = Math.min(3, Math.min(this.getEnergy(), e.getEnergy()) / (double) 4);
             if (getEnergy() < 2 && e.getDistance() < 500) {
                 POTENCIA_TIRO = 0.1;
@@ -490,13 +756,12 @@ public class BT_7274 extends AdvancedRobot {
                 POTENCIA_TIRO = Math.max(POTENCIA_TIRO, 2.9);
             }
             onda.potenciaTiro = POTENCIA_TIRO;
-            // -------------------------------------------------------------------------------------------------
             
-            // O GATILHO DAS 3 MIRAS AUXILIARES 
             double tempoEstimadoVoo = inimigo.distancia / Rules.getBulletSpeed(onda.potenciaTiro);
             onda.registrarMirasAuxiliares(inimigo, meuRobo, tempoEstimadoVoo);
             
-            // O BOT VIRA O CANHÃO (Agora com a votação auxiliar embutida na estatística)
+            onda.registrarMirasARMA_ARIMA(inimigo, meuRobo, tempoEstimadoVoo, getOthers());
+            
             setTurnGunRightRadians(Utils.normalRelativeAngle(
                     inimigo.anguloAbsolutoRadianos - getGunHeadingRadians() + onda.offsetAnguloMaisVisitado()));
                     
@@ -505,9 +770,31 @@ public class BT_7274 extends AdvancedRobot {
             if (getEnergy() >= onda.potenciaTiro) {
                 addCustomEvent(onda);
             }
+            
+            // --- DETECÇÃO DE ONDAS INIMIGAS (SURFING) ---
+            double quedaEnergia = energiaInimigoAnterior_1v1 - e.getEnergy();
+            if (quedaEnergia > 0 && quedaEnergia <= 3.0) {
+                OndaInimiga ondaInimiga = new OndaInimiga();
+                ondaInimiga.tempoDisparo = getTime() - 1;
+                ondaInimiga.velocidadeBala = Rules.getBulletSpeed(quedaEnergia);
+                ondaInimiga.origem = (Point2D.Double) Utilitario.projetar(new Point2D.Double(getX(), getY()), inimigo.anguloAbsolutoRadianos, inimigo.distancia);
+                ondaInimiga.anguloDireto = Utilitario.anguloAbsoluto(ondaInimiga.origem, new Point2D.Double(getX(), getY()));
+                ondaInimiga.direcaoLateral = Utilitario.sinal(getVelocity() * Math.sin(getHeadingRadians() - ondaInimiga.anguloDireto));
+                if (ondaInimiga.direcaoLateral == 0) ondaInimiga.direcaoLateral = 1;
+                ondasInimigas.add(ondaInimiga);
+            }
+            energiaInimigoAnterior_1v1 = e.getEnergy();
                 
             movimento1VS1.onScannedRobot(e);
-            setTurnRadarRightRadians(Utils.normalRelativeAngle(inimigo.anguloAbsolutoRadianos - getRadarHeadingRadians()) * 2);
+            
+            if (habilitarSurfing) {
+                executarSurfing();
+            }
+
+            double anguloRadar = Utils.normalRelativeAngle(inimigo.anguloAbsolutoRadianos - getRadarHeadingRadians());
+            double travaFina = Math.atan(45.0 / inimigo.distancia); 
+            anguloRadar += (anguloRadar < 0 ? -travaFina : travaFina);
+            setTurnRadarRightRadians(anguloRadar);
         }
     }
 
@@ -516,6 +803,14 @@ public class BT_7274 extends AdvancedRobot {
         if (inimigo != null) {
             inimigo.agressividade += 0.5;
             inimigo.fatorAmeaca *= 1.1; 
+        }
+        
+        if (confiancaSurfing >= confiancaMRM) {
+            confiancaSurfing = Math.max(0.1, confiancaSurfing - 0.3);
+            confiancaMRM = Math.min(3.0, confiancaMRM + 0.15);
+        } else {
+            confiancaMRM = Math.max(0.1, confiancaMRM - 0.3);
+            confiancaSurfing = Math.min(3.0, confiancaSurfing + 0.15);
         }
     }
     
@@ -629,7 +924,7 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     // =========================================================
-    // LÓGICA DE MOVIMENTO MINIMUM RISK (NERF DE COLISÕES)
+    // LÓGICA DE MOVIMENTO MINIMUM RISK 
     // =========================================================
     public void movimento() {
         if (pontoAlvo.distance(meuRobo) < 15 || tempoInativo > 25) {
@@ -638,15 +933,22 @@ public class BT_7274 extends AdvancedRobot {
             
             Point2D.Double pontoMenorRisco = null;
             double menorRisco = Double.MAX_VALUE;
+            double melhorRiscoSurf = 0;
+            double melhorRiscoMRM = 0;
             
             for (Point2D.Double p : posicoesPossiveis) {
                 double riscoAtual = avaliarPonto(p);
                 if (riscoAtual <= menorRisco || pontoMenorRisco == null) {
                     menorRisco = riscoAtual;
                     pontoMenorRisco = p;
+                    melhorRiscoSurf = ultimoRiscoSurfingAvaliado;
+                    melhorRiscoMRM = ultimoRiscoMRMAvaliado;
                 }
             }
             pontoAlvo = pontoMenorRisco;
+            riscoSurfingAlvoAtual = melhorRiscoSurf;
+            riscoMRMAlvoAtual = melhorRiscoMRM;
+            
         } else {
             tempoInativo++;
             double angulo = Utilitario.anguloAbsoluto(meuRobo, pontoAlvo) - getHeadingRadians();
@@ -683,9 +985,39 @@ public class BT_7274 extends AdvancedRobot {
     
     public double avaliarPonto(Point2D.Double p) {
         double riscoTotal = 0;
+        double riscoSurfing = 0;
+        double riscoMRM = 0;
+        
+        // Movimentação de Órbita Forçada para inimigos básicos
+        if (alvo != null && alvo.vivo && alvo.classificadoComoBasico) {
+            double distParaAlvo = p.distance(alvo);
+            double desvioOrbita = Math.abs(distParaAlvo - 450.0); // Orbita a uma distância segura de 450px do alvo
+            riscoMRM += (desvioOrbita * 15.0); // Punição altíssima para sair do anel de órbita (força o Wave Surfing circular)
+        }
+
+        if (habilitarSurfing && !ondasInimigas.isEmpty()) {
+            double votoSurfing = 0;
+            for (OndaInimiga onda : ondasInimigas) {
+                int binDoPonto = onda.obterBin(p);
+                
+                double riscoOnda = 0;
+                for (int i = -2; i <= 2; i++) {
+                    int binAvaliado = (int) Utilitario.limitar(binDoPonto + i, 0, OndaInimiga.BINS_SURF - 1);
+                    riscoOnda += estatisticasSurfing[binAvaliado] * (1.0 / (Math.abs(i) + 1));
+                }
+                
+                double distVoo = (getTime() - onda.tempoDisparo) * onda.velocidadeBala;
+                double distRestante = onda.origem.distance(p) - distVoo;
+                
+                if (distRestante > 0) {
+                    votoSurfing += (riscoOnda * 8500.0) / Math.max(1, distRestante);
+                }
+            }
+            riscoSurfing += votoSurfing;
+        }
         
         double votoEstabilidade = Utilitario.aleatorioEntre(1.15, 2.42) / p.distanceSq(meuRobo);
-        riscoTotal += votoEstabilidade;
+        riscoMRM += votoEstabilidade;
         
         double fatorMultidao = (6.85 * Math.max(0, getOthers() - 1));
         double votoCentro = fatorMultidao / p.distanceSq(campoBatalha.width / 2, campoBatalha.height / 2);
@@ -702,7 +1034,7 @@ public class BT_7274 extends AdvancedRobot {
                             pesoCanto / p.distanceSq(0, campoBatalha.height) +
                             pesoCanto / p.distanceSq(campoBatalha.width, campoBatalha.height);
                             
-        riscoTotal += votoCentro + votoCantos;
+        riscoMRM += votoCentro + votoCantos;
         
         boolean existeInimigoVivo = false;
         Iterator<Robo> iteradorInimigos = listaInimigos.values().iterator();
@@ -728,7 +1060,7 @@ public class BT_7274 extends AdvancedRobot {
                 multiplicadorEvasao = 1.0 + ((1 - Math.abs(Math.sin(anguloRelativo))) + Math.abs(Math.cos(anguloRelativo))) / 2.0;
             }
             
-            riscoTotal += riscoBase * multiplicadorRota * multiplicadorEvasao;
+            riscoMRM += riscoBase * multiplicadorRota * multiplicadorEvasao;
         }
         
         double votoTiros = 0;
@@ -751,22 +1083,22 @@ public class BT_7274 extends AdvancedRobot {
                 votoTiros += 1050.5 / Math.max(1, posTiroPrevista.distanceSq(p));
             }
         }
-        riscoTotal += votoTiros;
+        riscoMRM += votoTiros;
         
         if (!existeInimigoVivo) {
-            riscoTotal += (1.1 + Math.abs(Utilitario.anguloAbsoluto(meuRobo, pontoAlvo) - getHeadingRadians()));
+            riscoMRM += (1.1 + Math.abs(Utilitario.anguloAbsoluto(meuRobo, pontoAlvo) - getHeadingRadians()));
         }
 
         if (alvo != null && alvo.vivo && alvo.energia < 15 && meuRobo.energia > (alvo.energia * 2.5) && getOthers() <= 3) {
-            riscoTotal -= (125.0 / Math.max(1, p.distance(alvo))); 
+            riscoMRM -= (125.0 / Math.max(1, p.distance(alvo))); 
         }
         
         if (alvo != null && alvo.vivo && alvo.classificadoComoSurfer && existeInimigoVivo) {
             double distanciaParaSurfer = p.distance(alvo);
             if (distanciaParaSurfer > 200) {
-                riscoTotal -= (850.0 * alvo.fatorSurf) / Math.max(1, distanciaParaSurfer); 
+                riscoMRM -= (850.0 * alvo.fatorSurf) / Math.max(1, distanciaParaSurfer); 
             } else {
-                riscoTotal += (150.0 / Math.max(1, distanciaParaSurfer)); 
+                riscoMRM += (150.0 / Math.max(1, distanciaParaSurfer)); 
             }
         }
         
@@ -776,7 +1108,7 @@ public class BT_7274 extends AdvancedRobot {
             double diferencaAngulo = Math.abs(Utils.normalRelativeAngle(direcaoRealInimigo - anguloNossoPonto));
             
             double votoImitacao = -18.5 * (1.0 - (diferencaAngulo / Math.PI)) * (Math.abs(alvo.velocidade) / 8.0);
-            riscoTotal += votoImitacao;
+            riscoMRM += votoImitacao;
         }
         
         double anguloParaPonto = Utilitario.anguloAbsoluto(meuRobo, p);
@@ -785,10 +1117,15 @@ public class BT_7274 extends AdvancedRobot {
         double fatorCaos = Math.sin(getTime() / 85.5); 
         
         if (fatorCaos > 0.8 && diferencaInercia < 0.3) {
-            riscoTotal += 35.0; 
+            riscoMRM += 35.0; 
         } else if (fatorCaos < -0.8 && diferencaInercia > Math.PI / 2) {
-            riscoTotal += 35.0; 
+            riscoMRM += 35.0; 
         }
+        
+        ultimoRiscoSurfingAvaliado = riscoSurfing;
+        ultimoRiscoMRMAvaliado = riscoMRM;
+        
+        riscoTotal = (riscoSurfing * confiancaSurfing) + (riscoMRM * confiancaMRM);
         
         return riscoTotal;
     }
