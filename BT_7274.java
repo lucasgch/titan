@@ -8,7 +8,7 @@ import java.util.*;
 
 /**
  * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * Versão VANGUARD PATCH 5.0: Ensemble Model (KD-Tree + Matriz de Segmentos).
+ * Versão VANGUARD PATCH 6.0: Ensemble Model com Purga Ativa de KD-Tree (Concept Drift).
  */
 public class BT_7274 extends AdvancedRobot {
 
@@ -31,8 +31,9 @@ public class BT_7274 extends AdvancedRobot {
     static class Wave { 
         double startX, startY, bulletSpeed, armaPredictedAngle; 
         int direction; long fireTime; String enemyName; 
-        int[] segments;      // Para a Matriz Antiga
-        double[] features;   // Para a KD-Tree
+        int[] segments;      
+        double[] features;   
+        int kdTreePredictedIndex; // Guarda a aposta da KD-Tree para checarmos depois
     }
     
     static class EnemyVirtualWave {
@@ -90,9 +91,9 @@ public class BT_7274 extends AdvancedRobot {
     static class EnemyData {
         double avgVelocity = 0, avgHeadingChange = 0, lastHeading = 0, lastVelocity = 0;
         
-        // O MELHOR DOS DOIS MUNDOS: Matriz Segmentada + KD-Tree Contínua
         int[][][][][] segmentedGF = new int[3][3][3][2][31]; 
         KDTree kdTree = new KDTree(); 
+        double kdTreeRollingError = 0; // Média de erro das previsões da KD-Tree
         
         boolean isClinger = false; int closeTicks = 0;
         double[] enemyGunScores = new double[5]; 
@@ -142,7 +143,6 @@ public class BT_7274 extends AdvancedRobot {
             int lateralDirection = (e.getVelocity() * Math.sin(e.getHeadingRadians() - absBearing) >= 0) ? 1 : -1;
             int myLateralDirection = (getVelocity() * Math.sin(getHeadingRadians() - (absBearing + Math.PI)) >= 0) ? 1 : -1;
 
-            // Defesa / Virtual Guns
             double energyDrop = lastEnemyEnergy - e.getEnergy();
             if (energyDrop > 0 && energyDrop <= 3.0) {
                 EnemyVirtualWave evw = new EnemyVirtualWave();
@@ -178,7 +178,6 @@ public class BT_7274 extends AdvancedRobot {
 
             doWallSmoothingMovement(e, data, absBearing);
             
-            // PREPARAÇÃO DOS DADOS (Segmentados e Contínuos)
             int[] currentSegments = calculateSegments(e, ex, ey, previousEnemyVelocity);
             double wallDist = Math.min(Math.min(ex, ey), Math.min(getBattleFieldWidth() - ex, getBattleFieldHeight() - ey));
             double[] currentFeatures = new double[] {
@@ -227,7 +226,7 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     private void doAiming(ScannedRobotEvent e, EnemyData data, double absBearing, int lateralDirection, double ex, double ey, int[] currentSegs, double[] currentFeatures) {
-        // --- 1. APRENDIZADO SIMULTÂNEO (Atualiza Matriz e KD-Tree) ---
+        // --- 1. RESOLUÇÃO DE ONDAS E PURGA ADAPTATIVA ---
         for (int i = 0; i < activeWaves.size(); i++) {
             Wave w = activeWaves.get(i);
             if ((getTime() - w.fireTime) * w.bulletSpeed > Point2D.distance(w.startX, w.startY, ex, ey) - 18) {
@@ -245,6 +244,20 @@ public class BT_7274 extends AdvancedRobot {
                     // Alimenta a KD-Tree
                     double continuousGF = Math.max(-1.0, Math.min(1.0, error / maxEscape));
                     data.kdTree.add(w.features, continuousGF); 
+                    
+                    // VERIFICAÇÃO DE PRECISÃO DA KD-TREE
+                    if (w.kdTreePredictedIndex != -1) {
+                        double errorBins = Math.abs(index - w.kdTreePredictedIndex);
+                        // Atualiza a Média Móvel Exponencial do erro (pesa 10% para os dados recentes)
+                        data.kdTreeRollingError = (data.kdTreeRollingError * 0.9) + (errorBins * 0.1);
+                        
+                        // SE O ERRO MÉDIO FOR MAIOR QUE 6 BINS (muito impreciso) E A ÁRVORE JÁ TIVER VOLUME:
+                        if (data.kdTreeRollingError > 6.0 && data.kdTree.size > 50) {
+                            System.out.println("BT-7274: Inimigo mudou padrão de evasão. Purgando KD-Tree antiga.");
+                            data.kdTree = new KDTree(); // Limpeza completa dos dados corrompidos
+                            data.kdTreeRollingError = 0.0; // Zera o rastreamento
+                        }
+                    }
                 }
                 activeWaves.remove(i--); 
             }
@@ -257,10 +270,12 @@ public class BT_7274 extends AdvancedRobot {
         int[] sBins = data.segmentedGF[currentSegs[0]][currentSegs[1]][currentSegs[2]][currentSegs[3]];
         double maxSeg = 1.0; 
         for (int count : sBins) if (count > maxSeg) maxSeg = count;
-        for (int i = 0; i < 31; i++) combinedBins[i] += (sBins[i] / maxSeg); // Normaliza 0.0 a 1.0
+        for (int i = 0; i < 31; i++) combinedBins[i] += (sBins[i] / maxSeg); 
 
         // --- 2B. PROCESSA VOTOS DA KD-TREE ---
         int k = Math.min(data.kdTree.size, 30);
+        int currentKdBestIndex = -1; 
+        
         if (k > 0) {
             List<NodeDistance> neighbors = data.kdTree.findNearest(currentFeatures, k);
             double[] knnBins = new double[31];
@@ -272,8 +287,14 @@ public class BT_7274 extends AdvancedRobot {
                 knnBins[index] += 1.0 / (0.1 + nd.distance); 
             }
             
-            for (double val : knnBins) if (val > maxKnn) maxKnn = val;
-            for (int i = 0; i < 31; i++) combinedBins[i] += (knnBins[i] / maxKnn); // Normaliza 0.0 a 1.0 e soma
+            for (int i = 0; i < 31; i++) {
+                if (knnBins[i] > maxKnn) {
+                    maxKnn = knnBins[i];
+                    currentKdBestIndex = i; // Armazena a previsão pura da KD-Tree
+                }
+            }
+            
+            for (int i = 0; i < 31; i++) combinedBins[i] += (knnBins[i] / maxKnn); 
         }
 
         // --- 3. ESCOLHE O MELHOR ÂNGULO DO ENSEMBLE ---
@@ -286,7 +307,6 @@ public class BT_7274 extends AdvancedRobot {
         }
 
         // --- 4. PODER DE FOGO DINÂMICO ---
-        // ensembleConfidence varia de 0.0 a 2.0 (se ambos concordarem totalmente)
         double basePower = 1.0; 
         double gfBonus = Math.min(1.5, ensembleConfidence * 0.8); 
         double bestDefenseScore = data.enemyGunScores[data.getBestEnemyGun()];
@@ -325,6 +345,7 @@ public class BT_7274 extends AdvancedRobot {
             w.bulletSpeed = bulletSpeed; w.armaPredictedAngle = baseArmaAngle; w.direction = lateralDirection; 
             w.enemyName = e.getName();
             w.segments = currentSegs; w.features = currentFeatures; 
+            w.kdTreePredictedIndex = currentKdBestIndex; // Salva para conferência futura
             activeWaves.add(w);
         }
     }
