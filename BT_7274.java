@@ -1,358 +1,581 @@
 package sample;
 
-import robocode.*;
-import robocode.util.Utils;
 import java.awt.Color;
 import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
 import java.util.*;
 
+import robocode.*;
+import robocode.util.Utils;
+
 /**
- * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * Versão VANGUARD PATCH 6.0: Ensemble Model com Purga Ativa de KD-Tree (Concept Drift).
+ * BT-7274 (Núcleo Original + Movimentação MRM por Votação)
+ * Estratégia Híbrida: 
+ * - Melee (>1 inimigos): Voting Minimum Risk Movement + Perfilamento de Ameaça + Mira Preditiva
+ * - 1v1 (1 inimigo): Evasão com Wall-Smoothing + Mira GuessFactor (Ondas)
  */
 public class BT_7274 extends AdvancedRobot {
+    
+    // =========================================================
+    // CONSTANTES GLOBAIS
+    // =========================================================
+    static double POTENCIA_TIRO = 3;
+    static final int QUANTIDADE_PONTOS_PREVISTOS = 150;
+    static final double MARGEM_PAREDE = 18;
+    static Random aleatorio = new Random();
 
-    private static final Map<String, EnemyData> enemyMap = new HashMap<>();
-    private List<Wave> activeWaves = new ArrayList<>(); 
-    private List<EnemyVirtualWave> enemyVirtualWaves = new ArrayList<>();
+    // =========================================================
+    // VARIÁVEIS DE ESTADO DO ROBÔ
+    // =========================================================
+    HashMap<String, Robo> listaInimigos = new HashMap<>();
+    Robo meuRobo = new Robo();
+    Robo alvo;
     
-    private String trackName = null;
-    private double closestDistance = 10000;
-    private long lastScanTime = 0;
-    private int moveDirection = 1;
-    private double lastEnemyEnergy = 100;
-    private double myLastHeading = 0;
+    List<Point2D.Double> posicoesPossiveis = new ArrayList<>();
+    Point2D.Double pontoAlvo = new Point2D.Double(60, 60);
+    Rectangle2D.Double campoBatalha = new Rectangle2D.Double();
     
-    private double totalBearingChange = 0;
-    private double lastAbsBearing = 0;
-    private int orbitCounter = 0;
-    private int randomOrbitLimit = 2 + (int)(Math.random() * 6);
-
-    static class Wave { 
-        double startX, startY, bulletSpeed, armaPredictedAngle; 
-        int direction; long fireTime; String enemyName; 
-        int[] segments;      
-        double[] features;   
-        int kdTreePredictedIndex; // Guarda a aposta da KD-Tree para checarmos depois
-    }
+    int tempoInativo = 30;
+    private static double direcaoLateral;
+    private static double velocidadeInimigoAnterior;
+    private Movimento_1VS1 movimento1VS1;
     
-    static class EnemyVirtualWave {
-        Point2D.Double fireLoc; long fireTime; double bulletSpeed;
-        double[] predictedBearings = new double[5]; String enemyName;
-    }
-
-    // --- KD-TREE CLASSES ---
-    static class KDNode {
-        double[] features; double guessFactor; KDNode left, right;
-        public KDNode(double[] f, double gf) { features = f; guessFactor = gf; }
-    }
-    
-    static class NodeDistance implements Comparable<NodeDistance> {
-        KDNode node; double distance;
-        NodeDistance(KDNode n, double d) { node = n; distance = d; }
-        public int compareTo(NodeDistance other) { return Double.compare(other.distance, this.distance); }
-    }
-    
-    static class KDTree {
-        KDNode root; int size = 0;
-        public void add(double[] features, double guessFactor) {
-            root = addRec(root, features, guessFactor, 0); size++;
-        }
-        private KDNode addRec(KDNode node, double[] features, double guessFactor, int depth) {
-            if (node == null) return new KDNode(features, guessFactor);
-            int axis = depth % 4; 
-            if (features[axis] < node.features[axis]) node.left = addRec(node.left, features, guessFactor, depth + 1);
-            else node.right = addRec(node.right, features, guessFactor, depth + 1);
-            return node;
-        }
-        public List<NodeDistance> findNearest(double[] target, int k) {
-            PriorityQueue<NodeDistance> pq = new PriorityQueue<>();
-            searchRec(root, target, k, 0, pq);
-            return new ArrayList<>(pq);
-        }
-        private void searchRec(KDNode node, double[] target, int k, int depth, PriorityQueue<NodeDistance> pq) {
-            if (node == null) return;
-            double dist = 0;
-            for (int i = 0; i < 4; i++) dist += Math.pow(node.features[i] - target[i], 2);
-            dist = Math.sqrt(dist);
-            if (pq.size() < k) pq.offer(new NodeDistance(node, dist));
-            else if (dist < pq.peek().distance) { pq.poll(); pq.offer(new NodeDistance(node, dist)); }
-            
-            int axis = depth % 4; double diff = target[axis] - node.features[axis];
-            KDNode first = diff < 0 ? node.left : node.right;
-            KDNode second = diff < 0 ? node.right : node.left;
-            
-            searchRec(first, target, k, depth + 1, pq);
-            if (pq.size() < k || Math.abs(diff) < pq.peek().distance) searchRec(second, target, k, depth + 1, pq);
-        }
+    // Inicializador de instâncias
+    {
+        movimento1VS1 = new Movimento_1VS1(this);
     }
 
-    // --- ENEMY DATA ---
-    static class EnemyData {
-        double avgVelocity = 0, avgHeadingChange = 0, lastHeading = 0, lastVelocity = 0;
+    // =========================================================
+    // CLASSES AUXILIARES E ESTRUTURAS DE DADOS
+    // =========================================================
+    
+    class Robo extends Point2D.Double {
+        public long tempoVarredura; 
+        public boolean vivo = true;
+        public double energia;
+        public String nome;
+        public double anguloCanhaoRadianos;
+        public double anguloAbsolutoRadianos;
+        public double velocidade;
+        public double direcao;
+        public double ultimaDirecao;
+        public double pontuacaoDisparo;
+        public double distancia; 
         
-        int[][][][][] segmentedGF = new int[3][3][3][2][31]; 
-        KDTree kdTree = new KDTree(); 
-        double kdTreeRollingError = 0; // Média de erro das previsões da KD-Tree
+        // --- VARIÁVEIS DE PERFILAMENTO DE ESTRATÉGIA ---
+        public double fatorAmeaca = 1.0; 
+        public double energiaAnterior = 100;
+        public double agressividade = 0.0;
+    }
+    
+    public static class Utilitario {
+        static double limitar(double valor, double min, double max) {
+            return Math.max(min, Math.min(max, valor));
+        }
         
-        boolean isClinger = false; int closeTicks = 0;
-        double[] enemyGunScores = new double[5]; 
+        static double aleatorioEntre(double min, double max) {
+            return min + Math.random() * (max - min);
+        }
+        
+        static Point2D projetar(Point2D origem, double angulo, double distancia) {
+            return new Point2D.Double(
+                origem.getX() + Math.sin(angulo) * distancia,
+                origem.getY() + Math.cos(angulo) * distancia
+            );
+        }
+        
+        static double anguloAbsoluto(Point2D origem, Point2D alvo) {
+            return Math.atan2(alvo.getX() - origem.getX(), alvo.getY() - origem.getY());
+        }
+        
+        static int sinal(double v) {
+            return v < 0 ? -1 : 1;
+        }
+    }
 
-        void updateStats(double v, double h, double dist) {
-            double hChange = Utils.normalRelativeAngle(h - lastHeading);
-            avgVelocity = (v * 0.7) + (avgVelocity * 0.3);
-            avgHeadingChange = (hChange * 0.7) + (avgHeadingChange * 0.3);
-            lastHeading = h; lastVelocity = v; 
-
-            if (!isClinger) {
-                if (dist < 45) { closeTicks++; if (closeTicks > 20) isClinger = true; } 
-                else if (dist > 100) closeTicks = Math.max(0, closeTicks - 1);
+    // =========================================================
+    // LÓGICA DE MOVIMENTO 1 VS 1 (EVASÃO + WALL SMOOTHING)
+    // =========================================================
+    class Movimento_1VS1 {
+        private static final double LARGURA_CAMPO = 800;
+        private static final double ALTURA_CAMPO = 600;
+        private static final double TEMPO_MAX_TENTATIVA = 125;
+        private static final double AJUSTE_REVERSA = 0.421075;
+        private static final double EVASAO_PADRAO = 1.2;
+        private static final double AJUSTE_QUIQUE_PAREDE = 0.699484;
+        
+        private final AdvancedRobot robô;
+        private final Rectangle2D areaDisparo = new Rectangle2D.Double(
+            MARGEM_PAREDE, MARGEM_PAREDE,
+            LARGURA_CAMPO - MARGEM_PAREDE * 2, ALTURA_CAMPO - MARGEM_PAREDE * 2
+        );
+        private double direcao = 0.4;
+        
+        Movimento_1VS1(AdvancedRobot _robô) {
+            this.robô = _robô;
+        }
+        
+        public void onScannedRobot(ScannedRobotEvent e) {
+            Robo inimigo = new Robo();
+            inimigo.anguloAbsolutoRadianos = robô.getHeadingRadians() + e.getBearingRadians();
+            inimigo.distancia = e.getDistance();
+            
+            Point2D posicaoRobo = new Point2D.Double(robô.getX(), robô.getY());
+            Point2D posicaoInimigo = Utilitario.projetar(posicaoRobo, inimigo.anguloAbsolutoRadianos, inimigo.distancia);
+            Point2D destinoRobo;
+            
+            double tempoTentativa = 0;
+            
+            while (!areaDisparo.contains(destinoRobo = Utilitario.projetar(
+                    posicaoInimigo, 
+                    inimigo.anguloAbsolutoRadianos + Math.PI + direcao,
+                    inimigo.distancia * (EVASAO_PADRAO - tempoTentativa / 100.0))) 
+                    && tempoTentativa < TEMPO_MAX_TENTATIVA) {
+                tempoTentativa++;
             }
-        }
-        
-        int getBestEnemyGun() {
-            int best = 0;
-            for (int i = 1; i < 5; i++) if (enemyGunScores[i] > enemyGunScores[best]) best = i;
-            return best;
+                
+            if ((Math.random() < (Rules.getBulletSpeed(POTENCIA_TIRO) / AJUSTE_REVERSA) / inimigo.distancia ||
+                    tempoTentativa > (inimigo.distancia / Rules.getBulletSpeed(POTENCIA_TIRO) / AJUSTE_QUIQUE_PAREDE))) {
+                direcao = -direcao;
+            }
+                
+            double angulo = Utilitario.anguloAbsoluto(posicaoRobo, destinoRobo) - robô.getHeadingRadians();
+            robô.setAhead(Math.cos(angulo) * 100);
+            robô.setTurnRightRadians(Math.tan(angulo));
         }
     }
 
+    // =========================================================
+    // LÓGICA DE TIRO 1 VS 1 (GUESSFACTOR / ONDAS)
+    // =========================================================
+    static class Onda extends Condition {
+        static Point2D posicaoAlvo;
+        double potenciaTiro;
+        Point2D posicaoCanhao;
+        double angulo;
+        double direcaoLateral;
+        
+        private static final double DISTANCIA_MAXIMA = 900;
+        private static final int INDICES_DISTANCIA = 5;
+        private static final int INDICES_VELOCIDADE = 5;
+        private static final int BINS = 25;
+        private static final int BIN_CENTRAL = (BINS - 1) / 2;
+        private static final double ANGULO_ESCAPE_MAXIMO = 0.7;
+        private static final double LARGURA_BIN = ANGULO_ESCAPE_MAXIMO / (double) BIN_CENTRAL; 
+        
+        private static final int[][][][] buffersEstatisticos = new int[INDICES_DISTANCIA][INDICES_VELOCIDADE][INDICES_VELOCIDADE][BINS];
+        private int[] buffer;
+        private double distanciaPercorrida;
+        private final AdvancedRobot robô;
+        
+        Onda(AdvancedRobot _robô) {
+            this.robô = _robô;
+        }
+        
+        public boolean test() {
+            avancar();
+            if (chegou()) {
+                buffer[binAtual()]++;
+                robô.removeCustomEvent(this);
+            }
+            return false;
+        }
+        
+        double offsetAnguloMaisVisitado() {
+            return (direcaoLateral * LARGURA_BIN) * (binMaisVisitado() - BIN_CENTRAL);
+        }
+        
+        void definirSegmentacoes(double distancia, double velocidade, double ultimaVelocidade) {
+            int indiceDistancia = (int) (distancia / (DISTANCIA_MAXIMA / INDICES_DISTANCIA));
+            int indiceVelocidade = (int) Math.abs(velocidade / 2);
+            int indiceUltimaVelocidade = (int) Math.abs(ultimaVelocidade / 2);
+            buffer = buffersEstatisticos[indiceDistancia][indiceVelocidade][indiceUltimaVelocidade];
+        }
+        
+        private void avancar() {
+            distanciaPercorrida += Rules.getBulletSpeed(potenciaTiro);
+        }
+        
+        private boolean chegou() {
+            return distanciaPercorrida > posicaoCanhao.distance(posicaoAlvo) - MARGEM_PAREDE;
+        }
+        
+        private int binAtual() {
+            int bin = (int) Math.round(((Utils.normalRelativeAngle(
+                Utilitario.anguloAbsoluto(posicaoCanhao, posicaoAlvo) - angulo)) /
+                (direcaoLateral * LARGURA_BIN)) + BIN_CENTRAL);
+            return (int) Utilitario.limitar(bin, 0, BINS - 1);
+        }
+        
+        private int binMaisVisitado() {
+            int maisVisitado = BIN_CENTRAL;
+            for (int i = 0; i < BINS; i++) {
+                if (buffer[i] > buffer[maisVisitado]) maisVisitado = i;
+            }
+            return maisVisitado;
+        }
+    }
+    
+    // =========================================================
+    // ESTÉTICA E CORES
+    // =========================================================
+    private void coresBT7274() {
+        setColors(new Color(60, 80, 40), new Color(255, 120, 0), new Color(100, 100, 100), 
+                  new Color(255, 120, 0), new Color(255, 120, 0));
+    }
+    
+    private void corVitoria() {
+        setColors(new Color(60, 80, 40), new Color(255, 120, 0), new Color(100, 100, 100), 
+                  new Color(255, 120, 0), new Color(255, 120, 0));
+    }
+
+    // =========================================================
+    // LOOP PRINCIPAL (RUN)
+    // =========================================================
     public void run() {
-        setBodyColor(new Color(30, 40, 30)); setGunColor(new Color(255, 140, 0)); setRadarColor(new Color(20, 20, 20));
-        setAdjustGunForRobotTurn(true); setAdjustRadarForGunTurn(true); setAdjustRadarForRobotTurn(true);
-
-        while (true) {
-            if (trackName == null || getRadarTurnRemaining() == 0) setTurnRadarRight(360);
-            execute();
+        campoBatalha.height = getBattleFieldHeight();
+        campoBatalha.width = getBattleFieldWidth();
+        
+        meuRobo.x = getX();
+        meuRobo.y = getY();
+        meuRobo.energia = getEnergy();
+        
+        pontoAlvo.x = meuRobo.x;
+        pontoAlvo.y = meuRobo.y;
+        
+        alvo = new Robo();
+        alvo.vivo = false;
+        
+        setAdjustGunForRobotTurn(true);
+        setAdjustRadarForGunTurn(true);
+        
+        if (getOthers() > 1) {
+            atualizarListaPosicoes(QUANTIDADE_PONTOS_PREVISTOS);
+            setTurnRadarRightRadians(Double.POSITIVE_INFINITY);
+            
+            while (true) {
+                meuRobo.ultimaDirecao = meuRobo.direcao;
+                meuRobo.direcao = getHeadingRadians();
+                meuRobo.x = getX();
+                meuRobo.y = getY();
+                meuRobo.energia = getEnergy();
+                meuRobo.anguloCanhaoRadianos = getGunHeadingRadians();
+                
+                Iterator<Robo> iteradorInimigos = listaInimigos.values().iterator();
+                while (iteradorInimigos.hasNext()) {
+                    Robo r = iteradorInimigos.next();
+                    if (getTime() - r.tempoVarredura > 25) {
+                        r.vivo = false;
+                        if (alvo.nome != null && r.nome.equals(alvo.nome))
+                            alvo.vivo = false;
+                    }
+                }
+                
+                movimento();
+                
+                if (alvo.vivo) {
+                    disparar();
+                }
+                execute();
+            }
+        }
+        else {
+            direcaoLateral = 1;
+            velocidadeInimigoAnterior = 0;
+            while (true) {
+                turnRadarRightRadians(Double.POSITIVE_INFINITY);
+            }
         }
     }
 
+    // =========================================================
+    // EVENTOS DO ROBÔ & PERFILAMENTO DE ESTRATÉGIA
+    // =========================================================
     public void onScannedRobot(ScannedRobotEvent e) {
-        if (getTime() - lastScanTime > 5) closestDistance = 10000;
+        coresBT7274();
+        
+        if (getOthers() > 1) {
+            Robo inimigo = listaInimigos.get(e.getName());
+            if (inimigo == null) {
+                inimigo = new Robo();
+                listaInimigos.put(e.getName(), inimigo);
+            }
+            
+            // --- ATUALIZAÇÃO DO PERFIL ESTRATÉGICO ---
+            double quedaEnergia = inimigo.energiaAnterior - e.getEnergy();
+            if (quedaEnergia > 0 && quedaEnergia <= 3) {
+                // Inimigo possivelmente disparou. Aumenta agressividade.
+                inimigo.agressividade += 0.1;
+            }
+            inimigo.energiaAnterior = e.getEnergy();
+            
+            // Define fator de ameaça: Energia alta, agressividade e proximidade aumentam a ameaça
+            inimigo.fatorAmeaca = (e.getEnergy() / Math.max(1, meuRobo.energia)) + inimigo.agressividade;
+            if (e.getDistance() < 250) inimigo.fatorAmeaca *= 1.5; // Muito perigoso se perto
+            // -----------------------------------------
 
-        if (trackName == null || e.getName().equals(trackName) || e.getDistance() < closestDistance || getOthers() > 1) {
-            trackName = e.getName(); closestDistance = e.getDistance(); lastScanTime = getTime();
-
-            EnemyData data = enemyMap.getOrDefault(e.getName(), new EnemyData());
-            double previousEnemyVelocity = data.lastVelocity;
-            data.updateStats(e.getVelocity(), e.getHeadingRadians(), e.getDistance());
-
-            double absBearing = getHeadingRadians() + e.getBearingRadians();
-            double ex = getX() + Math.sin(absBearing) * e.getDistance();
-            double ey = getY() + Math.cos(absBearing) * e.getDistance();
-            int lateralDirection = (e.getVelocity() * Math.sin(e.getHeadingRadians() - absBearing) >= 0) ? 1 : -1;
-            int myLateralDirection = (getVelocity() * Math.sin(getHeadingRadians() - (absBearing + Math.PI)) >= 0) ? 1 : -1;
-
-            double energyDrop = lastEnemyEnergy - e.getEnergy();
-            if (energyDrop > 0 && energyDrop <= 3.0) {
-                EnemyVirtualWave evw = new EnemyVirtualWave();
-                evw.fireLoc = new Point2D.Double(ex, ey); evw.fireTime = getTime() - 1;
-                evw.bulletSpeed = 20 - (3 * energyDrop); evw.enemyName = e.getName();
+            inimigo.anguloAbsolutoRadianos = e.getBearingRadians();
+            inimigo.setLocation(new Point2D.Double(
+                    meuRobo.x + e.getDistance() * Math.sin(getHeadingRadians() + inimigo.anguloAbsolutoRadianos),
+                    meuRobo.y + e.getDistance() * Math.cos(getHeadingRadians() + inimigo.anguloAbsolutoRadianos)));
+            inimigo.ultimaDirecao = inimigo.direcao;
+            inimigo.nome = e.getName();
+            inimigo.energia = e.getEnergy();
+            inimigo.vivo = true;
+            inimigo.tempoVarredura = getTime();
+            inimigo.velocidade = e.getVelocity();
+            inimigo.direcao = e.getHeadingRadians();
+            
+            inimigo.pontuacaoDisparo = inimigo.energia < 25 ? (inimigo.energia < 5 ?
+                    (inimigo.energia == 0 ? Double.MIN_VALUE : inimigo.distance(meuRobo) * 0.1) :
+                    inimigo.distance(meuRobo) * 0.75) : inimigo.distance(meuRobo);
+                    
+            if (getOthers() == 1) {
+                setTurnRadarLeftRadians(getRadarTurnRemainingRadians());
+            }
+            
+            if (!alvo.vivo || inimigo.pontuacaoDisparo < alvo.pontuacaoDisparo) {
+                alvo = inimigo;
+            }
+        }
+        else {
+            setScanColor(Color.red);
+            Robo inimigo = new Robo();
+            inimigo.anguloAbsolutoRadianos = getHeadingRadians() + e.getBearingRadians();
+            inimigo.distancia = e.getDistance();
+            inimigo.velocidade = e.getVelocity();
+            
+            if (inimigo.velocidade != 0) {
+                direcaoLateral = Utilitario.sinal(inimigo.velocidade * Math.sin(e.getHeadingRadians() - inimigo.anguloAbsolutoRadianos));
+            }
                 
-                double flightTime = e.getDistance() / evw.bulletSpeed;
-                double myTurnRate = getHeadingRadians() - myLastHeading;
+            Onda onda = new Onda(this);
+            onda.posicaoCanhao = new Point2D.Double(getX(), getY());
+            Onda.posicaoAlvo = Utilitario.projetar(onda.posicaoCanhao, inimigo.anguloAbsolutoRadianos, inimigo.distancia);
+            onda.direcaoLateral = direcaoLateral;
+            onda.definirSegmentacoes(inimigo.distancia, inimigo.velocidade, velocidadeInimigoAnterior);
+            
+            velocidadeInimigoAnterior = inimigo.velocidade;
+            onda.angulo = inimigo.anguloAbsolutoRadianos;
+            
+            setTurnGunRightRadians(Utils.normalRelativeAngle(
+                    inimigo.anguloAbsolutoRadianos - getGunHeadingRadians() + onda.offsetAnguloMaisVisitado()));
+                    
+            POTENCIA_TIRO = Math.min(3, Math.min(this.getEnergy(), e.getEnergy()) / (double) 4);
+            onda.potenciaTiro = POTENCIA_TIRO;
+            
+            if (getEnergy() < 2 && e.getDistance() < 500)
+                onda.potenciaTiro = 0.1;
+            else if (e.getDistance() >= 500)
+                onda.potenciaTiro = 1.1;
                 
-                evw.predictedBearings[0] = absBearing + Math.PI; 
-                evw.predictedBearings[1] = Math.atan2((getX() + Math.sin(getHeadingRadians()) * getVelocity() * flightTime) - ex, (getY() + Math.cos(getHeadingRadians()) * getVelocity() * flightTime) - ey);
-                evw.predictedBearings[2] = Math.atan2((getX() + Math.sin(getHeadingRadians() + myTurnRate * flightTime) * getVelocity() * flightTime) - ex, (getY() + Math.cos(getHeadingRadians() + myTurnRate * flightTime) * getVelocity() * flightTime) - ey);
-                double maxMyEscape = Math.asin(8.0 / evw.bulletSpeed);
-                evw.predictedBearings[3] = (absBearing + Math.PI) + (maxMyEscape * 0.8 * myLateralDirection);
-                evw.predictedBearings[4] = (absBearing + Math.PI) - (maxMyEscape * 0.5 * myLateralDirection);
-                enemyVirtualWaves.add(evw);
+            setFire(onda.potenciaTiro);
+            
+            if (getEnergy() >= onda.potenciaTiro) {
+                addCustomEvent(onda);
             }
-            lastEnemyEnergy = e.getEnergy(); myLastHeading = getHeadingRadians();
+                
+            movimento1VS1.onScannedRobot(e);
+            setTurnRadarRightRadians(Utils.normalRelativeAngle(inimigo.anguloAbsolutoRadianos - getRadarHeadingRadians()) * 2);
+        }
+    }
 
-            for (int i = 0; i < enemyVirtualWaves.size(); i++) {
-                EnemyVirtualWave evw = enemyVirtualWaves.get(i);
-                if ((getTime() - evw.fireTime) * evw.bulletSpeed > Point2D.distance(evw.fireLoc.x, evw.fireLoc.y, getX(), getY())) {
-                    if (evw.enemyName.equals(e.getName())) {
-                        double myActualBearing = Math.atan2(getX() - evw.fireLoc.x, getY() - evw.fireLoc.y);
-                        for (int j = 0; j < 5; j++) {
-                            double error = Math.abs(Utils.normalRelativeAngle(myActualBearing - evw.predictedBearings[j]));
-                            data.enemyGunScores[j] *= 0.85; data.enemyGunScores[j] += (2.0 - (error * 8.0)); 
-                        }
-                    }
-                    enemyVirtualWaves.remove(i--);
+    public void onHitByBullet(HitByBulletEvent e) {
+        // Aumenta severamente a ameaça do robô que nos acertou
+        Robo inimigo = listaInimigos.get(e.getName());
+        if (inimigo != null) {
+            inimigo.agressividade += 0.5;
+            inimigo.fatorAmeaca *= 1.2;
+        }
+    }
+
+    public void onRobotDeath(RobotDeathEvent event) {
+        if (listaInimigos.containsKey(event.getName())) {
+            listaInimigos.get(event.getName()).vivo = false;
+        }
+        if (event.getName().equals(alvo.nome)) {
+            alvo.vivo = false;
+        }
+    }
+    
+    public void onWin(WinEvent event) {
+        while (true) {
+            corVitoria();
+            turnRadarRight(360);
+        }
+    }
+
+    // =========================================================
+    // LÓGICA DE DISPARO (MELEE PREDITIVO)
+    // =========================================================
+    public void disparar() {
+        if (alvo != null && alvo.vivo) {
+            double distancia = meuRobo.distance(alvo);
+            double potencia = (distancia > 850 ? 0.1 : (distancia > 700 ? 0.5 : (distancia > 250 ? 2.0 : 3.0)));
+            
+            potencia = Math.min(meuRobo.energia / 4d, Math.min(alvo.energia / 3d, potencia));
+            potencia = Utilitario.limitar(potencia, 0.1, 3.0);
+            
+            long tempoAteAcerto;
+            Point2D.Double mirarEm = new Point2D.Double();
+            double direcao, deltaDirecao, velocidadeTiro;
+            double preverX, preverY;
+            
+            preverX = alvo.getX();
+            preverY = alvo.getY();
+            direcao = alvo.direcao;
+            deltaDirecao = direcao - alvo.ultimaDirecao;
+            
+            mirarEm.setLocation(preverX, preverY);
+            tempoAteAcerto = 0;
+            
+            do {
+                preverX += Math.sin(direcao) * alvo.velocidade;
+                preverY += Math.cos(direcao) * alvo.velocidade;
+                direcao += deltaDirecao;
+                tempoAteAcerto++;
+                
+                Rectangle2D.Double areaDisparo = new Rectangle2D.Double(
+                    MARGEM_PAREDE, MARGEM_PAREDE,
+                    campoBatalha.width - MARGEM_PAREDE, campoBatalha.height - MARGEM_PAREDE
+                );
+                
+                if (!areaDisparo.contains(preverX, preverY)) {
+                    velocidadeTiro = mirarEm.distance(meuRobo) / tempoAteAcerto;
+                    potencia = Utilitario.limitar((20 - velocidadeTiro) / 3.0, 0.1, 3.0);
+                    break;
+                }
+                mirarEm.setLocation(preverX, preverY);
+                
+            } while ((int) Math.round((mirarEm.distance(meuRobo) - MARGEM_PAREDE) / Rules.getBulletSpeed(potencia)) > tempoAteAcerto);
+            
+            mirarEm.setLocation(
+                Utilitario.limitar(preverX, 34, getBattleFieldWidth() - 34),
+                Utilitario.limitar(preverY, 34, getBattleFieldHeight() - 34)
+            );
+            
+            if ((getGunHeat() == 0.0) && (getGunTurnRemaining() == 0.0) && (potencia > 0.0) && (meuRobo.energia > 0.1)) {
+                setFire(potencia);
+            }
+            
+            setTurnGunRightRadians(Utils.normalRelativeAngle(
+                ((Math.PI / 2) - Math.atan2(mirarEm.y - meuRobo.getY(), mirarEm.x - meuRobo.getX())) - getGunHeadingRadians()
+            ));
+        }
+    }
+
+    // =========================================================
+    // LÓGICA DE MOVIMENTO MINIMUM RISK (VOTAÇÃO + PERFILAMENTO)
+    // =========================================================
+    public void movimento() {
+        if (pontoAlvo.distance(meuRobo) < 15 || tempoInativo > 25) {
+            tempoInativo = 0;
+            atualizarListaPosicoes(QUANTIDADE_PONTOS_PREVISTOS);
+            
+            Point2D.Double pontoMenorRisco = null;
+            double menorRisco = Double.MAX_VALUE;
+            
+            for (Point2D.Double p : posicoesPossiveis) {
+                double riscoAtual = avaliarPonto(p);
+                if (riscoAtual <= menorRisco || pontoMenorRisco == null) {
+                    menorRisco = riscoAtual;
+                    pontoMenorRisco = p;
                 }
             }
-
-            doWallSmoothingMovement(e, data, absBearing);
+            pontoAlvo = pontoMenorRisco;
+        } else {
+            tempoInativo++;
+            double angulo = Utilitario.anguloAbsoluto(meuRobo, pontoAlvo) - getHeadingRadians();
+            double direcao = 1;
             
-            int[] currentSegments = calculateSegments(e, ex, ey, previousEnemyVelocity);
-            double wallDist = Math.min(Math.min(ex, ey), Math.min(getBattleFieldWidth() - ex, getBattleFieldHeight() - ey));
-            double[] currentFeatures = new double[] {
-                e.getDistance() / 800.0, Math.abs(e.getVelocity()) / 8.0, 
-                Math.abs(e.getVelocity() - previousEnemyVelocity) / 2.0, Math.min(wallDist, 200.0) / 200.0
-            };
-
-            doAiming(e, data, absBearing, lateralDirection, ex, ey, currentSegments, currentFeatures);
-            setTurnRadarRightRadians(Utils.normalRelativeAngle(absBearing - getRadarHeadingRadians()) * 2);
-            enemyMap.put(e.getName(), data);
+            if (Math.cos(angulo) < 0) {
+                angulo += Math.PI;
+                direcao *= -1;
+            }
+            
+            setMaxVelocity(10 - (4 * Math.abs(getTurnRemainingRadians())));
+            setAhead(meuRobo.distance(pontoAlvo) * direcao);
+            
+            angulo = Utils.normalRelativeAngle(angulo);
+            setTurnRightRadians(angulo);
         }
     }
 
-    private int[] calculateSegments(ScannedRobotEvent e, double ex, double ey, double lastEnemyVel) {
-        int distIdx = e.getDistance() < 250 ? 0 : (e.getDistance() < 500 ? 1 : 2);
-        double absVel = Math.abs(e.getVelocity());
-        int velIdx = absVel < 2 ? 0 : (absVel < 6 ? 1 : 2);
-        double deltaV = absVel - Math.abs(lastEnemyVel);
-        int accIdx = deltaV < -0.5 ? 0 : (deltaV > 0.5 ? 2 : 1);
-        double pad = 120;
-        int wallIdx = (ex < pad || ey < pad || ex > getBattleFieldWidth() - pad || ey > getBattleFieldHeight() - pad) ? 1 : 0;
-        return new int[]{distIdx, velIdx, accIdx, wallIdx};
-    }
-
-    private void doWallSmoothingMovement(ScannedRobotEvent e, EnemyData data, double absBearing) {
-        double desiredDist = (getOthers() > 1) ? 400 : 150;
-        if (data.isClinger) desiredDist = 250;
-        double wallSmoothingAngle = absBearing + (Math.PI / 2) * moveDirection;
-        double distAdjustment = (e.getDistance() - desiredDist) / desiredDist;
-        wallSmoothingAngle -= (distAdjustment * 0.5 * moveDirection);
-        double x = getX(), y = getY(), width = getBattleFieldWidth(), height = getBattleFieldHeight(), wallStick = 140; 
-        for (int i = 0; i < 100; i++) {
-            double testX = x + Math.sin(wallSmoothingAngle) * wallStick * moveDirection;
-            double testY = y + Math.cos(wallSmoothingAngle) * wallStick * moveDirection;
-            if (testX < 18 || testY < 18 || testX > width - 18 || testY > height - 18) wallSmoothingAngle += 0.1 * moveDirection;
-            else break;
-        }
-        setTurnRightRadians(Utils.normalRelativeAngle(wallSmoothingAngle - getHeadingRadians()));
-        setMaxVelocity(8); setAhead(100 * moveDirection);
-        if (lastAbsBearing != 0) totalBearingChange += Math.abs(Utils.normalRelativeAngle(absBearing - lastAbsBearing));
-        lastAbsBearing = absBearing;
-        if (totalBearingChange >= 2 * Math.PI) {
-            totalBearingChange = 0; orbitCounter++;
-            if (orbitCounter >= randomOrbitLimit) { moveDirection *= -1; orbitCounter = 0; randomOrbitLimit = 3 + (int)(Math.random() * 4); }
+    public void atualizarListaPosicoes(int n) {
+        posicoesPossiveis.clear();
+        final int alcanceX = (int) (125 * 1.5);
+        
+        for (int i = 0; i < n; i++) {
+            double modX = Utilitario.aleatorioEntre(-alcanceX, alcanceX);
+            double alcanceY = Math.sqrt(alcanceX * alcanceX - modX * modX);
+            double modY = Utilitario.aleatorioEntre(-alcanceY, alcanceY);
+            
+            double y = Utilitario.limitar(meuRobo.y + modY, 75, campoBatalha.height - 75);
+            double x = Utilitario.limitar(meuRobo.x + modX, 75, campoBatalha.width - 75);
+            
+            posicoesPossiveis.add(new Point2D.Double(x, y));
         }
     }
-
-    private void doAiming(ScannedRobotEvent e, EnemyData data, double absBearing, int lateralDirection, double ex, double ey, int[] currentSegs, double[] currentFeatures) {
-        // --- 1. RESOLUÇÃO DE ONDAS E PURGA ADAPTATIVA ---
-        for (int i = 0; i < activeWaves.size(); i++) {
-            Wave w = activeWaves.get(i);
-            if ((getTime() - w.fireTime) * w.bulletSpeed > Point2D.distance(w.startX, w.startY, ex, ey) - 18) {
-                if (w.enemyName.equals(e.getName())) {
-                    double actualAngle = Math.atan2(ex - w.startX, ey - w.startY);
-                    double error = Utils.normalRelativeAngle(actualAngle - w.armaPredictedAngle) * w.direction;
-                    double maxEscape = Math.asin(8.0 / w.bulletSpeed);
-                    int index = (int) Math.round(((error / maxEscape) * 15) + 15);
-                    index = Math.max(0, Math.min(30, index));
-                    
-                    // Alimenta a Matriz Segmentada
-                    int[] s = w.segments;
-                    data.segmentedGF[s[0]][s[1]][s[2]][s[3]][index]++; 
-                    
-                    // Alimenta a KD-Tree
-                    double continuousGF = Math.max(-1.0, Math.min(1.0, error / maxEscape));
-                    data.kdTree.add(w.features, continuousGF); 
-                    
-                    // VERIFICAÇÃO DE PRECISÃO DA KD-TREE
-                    if (w.kdTreePredictedIndex != -1) {
-                        double errorBins = Math.abs(index - w.kdTreePredictedIndex);
-                        // Atualiza a Média Móvel Exponencial do erro (pesa 10% para os dados recentes)
-                        data.kdTreeRollingError = (data.kdTreeRollingError * 0.9) + (errorBins * 0.1);
-                        
-                        // SE O ERRO MÉDIO FOR MAIOR QUE 6 BINS (muito impreciso) E A ÁRVORE JÁ TIVER VOLUME:
-                        if (data.kdTreeRollingError > 6.0 && data.kdTree.size > 50) {
-                            System.out.println("BT-7274: Inimigo mudou padrão de evasão. Purgando KD-Tree antiga.");
-                            data.kdTree = new KDTree(); // Limpeza completa dos dados corrompidos
-                            data.kdTreeRollingError = 0.0; // Zera o rastreamento
-                        }
-                    }
-                }
-                activeWaves.remove(i--); 
-            }
-        }
-
-        double[] combinedBins = new double[31];
-        double ensembleConfidence = 0;
-
-        // --- 2A. PROCESSA VOTOS DA MATRIZ SEGMENTADA ---
-        int[] sBins = data.segmentedGF[currentSegs[0]][currentSegs[1]][currentSegs[2]][currentSegs[3]];
-        double maxSeg = 1.0; 
-        for (int count : sBins) if (count > maxSeg) maxSeg = count;
-        for (int i = 0; i < 31; i++) combinedBins[i] += (sBins[i] / maxSeg); 
-
-        // --- 2B. PROCESSA VOTOS DA KD-TREE ---
-        int k = Math.min(data.kdTree.size, 30);
-        int currentKdBestIndex = -1; 
+    
+    /**
+     * NOVO SISTEMA DE AVALIAÇÃO POR VOTAÇÃO
+     * Combina Controle de Arena, Repulsão Básica e Evasão baseada no Perfil da Ameaça.
+     */
+    public double avaliarPonto(Point2D.Double p) {
+        double riscoTotal = 0;
         
-        if (k > 0) {
-            List<NodeDistance> neighbors = data.kdTree.findNearest(currentFeatures, k);
-            double[] knnBins = new double[31];
-            double maxKnn = 1.0;
+        // VOTO 1: Penalidade de movimentação desnecessária
+        double votoEstabilidade = Utilitario.aleatorioEntre(1, 2.25) / p.distanceSq(meuRobo);
+        riscoTotal += votoEstabilidade;
+        
+        // VOTO 2: Controle de Arena (Repulsão do Centro e dos Cantos)
+        double fatorMultidao = (6 * Math.max(0, getOthers() - 1));
+        double votoCentro = fatorMultidao / p.distanceSq(campoBatalha.width / 2, campoBatalha.height / 2);
+        
+        double pesoCanto = getOthers() <= 5 ? (getOthers() == 1 ? 0.25 : 0.5) : 1.0;
+        double votoCantos = pesoCanto / p.distanceSq(0, 0) +
+                            pesoCanto / p.distanceSq(campoBatalha.width, 0) +
+                            pesoCanto / p.distanceSq(0, campoBatalha.height) +
+                            pesoCanto / p.distanceSq(campoBatalha.width, campoBatalha.height);
+                            
+        riscoTotal += votoCentro + votoCantos;
+        
+        // VOTO 3: Fuga Baseada no Perfilamento (Inimigos Vivos)
+        boolean existeInimigoVivo = false;
+        Iterator<Robo> iteradorInimigos = listaInimigos.values().iterator();
+        
+        while (iteradorInimigos.hasNext()) {
+            Robo inimigo = iteradorInimigos.next();
+            if (!inimigo.vivo) continue;
+            existeInimigoVivo = true;
             
-            for (NodeDistance nd : neighbors) {
-                int index = (int) Math.round((nd.node.guessFactor * 15) + 15);
-                index = Math.max(0, Math.min(30, index));
-                knnBins[index] += 1.0 / (0.1 + nd.distance); 
+            // Fatores Base
+            double distanciaSqInimigo = p.distanceSq(inimigo);
+            double riscoBase = (1 / Math.max(1, distanciaSqInimigo));
+            
+            // Perfilamento: Multiplica o risco base pelo Fator de Ameaça do Inimigo
+            riscoBase *= inimigo.fatorAmeaca;
+            
+            // Suavização de Rota: Evitar andar em linha reta em direção ou fugindo do inimigo
+            double alinhamentoPonto = Math.abs(Math.cos(Utilitario.anguloAbsoluto(meuRobo, p) - Utilitario.anguloAbsoluto(inimigo, p)));
+            double multiplicadorRota = (1 + alinhamentoPonto);
+
+            // Perpendicularidade (Aplicado principalmente se o alvo principal for o inimigo avaliado)
+            double multiplicadorEvasao = 1.0;
+            if (alvo != null && alvo.vivo && inimigo.nome.equals(alvo.nome)) {
+                double anguloRelativo = Utils.normalRelativeAngle(Utilitario.anguloAbsoluto(p, alvo) - Utilitario.anguloAbsoluto(meuRobo, p));
+                multiplicadorEvasao = 1.0 + ((1 - Math.abs(Math.sin(anguloRelativo))) + Math.abs(Math.cos(anguloRelativo))) / 2;
             }
             
-            for (int i = 0; i < 31; i++) {
-                if (knnBins[i] > maxKnn) {
-                    maxKnn = knnBins[i];
-                    currentKdBestIndex = i; // Armazena a previsão pura da KD-Tree
-                }
-            }
-            
-            for (int i = 0; i < 31; i++) combinedBins[i] += (knnBins[i] / maxKnn); 
-        }
-
-        // --- 3. ESCOLHE O MELHOR ÂNGULO DO ENSEMBLE ---
-        int bestIndex = 15; 
-        for (int i = 0; i < 31; i++) {
-            if (combinedBins[i] > ensembleConfidence) {
-                ensembleConfidence = combinedBins[i];
-                bestIndex = i;
-            }
-        }
-
-        // --- 4. PODER DE FOGO DINÂMICO ---
-        double basePower = 1.0; 
-        double gfBonus = Math.min(1.5, ensembleConfidence * 0.8); 
-        double bestDefenseScore = data.enemyGunScores[data.getBestEnemyGun()];
-        double defenseBonus = (bestDefenseScore > 5.0) ? 0.5 : 0.0;
-
-        double firePower = basePower + gfBonus + defenseBonus;
-        firePower = Math.min(firePower, 400.0 / Math.max(1, e.getDistance())); 
-        firePower = Math.min(firePower, 3.0); 
-        firePower = Math.min(firePower, getEnergy() / 6.0); 
-        firePower = Math.min(firePower, (e.getEnergy() / 4.0) + 0.1); 
-        firePower = Math.max(0.1, firePower); 
-
-        double bulletSpeed = 20 - (3 * firePower);
-        
-        // --- 5. DISPARO ARMA + ENSEMBLE GF ---
-        double gunTurnTicks = Math.abs(Utils.normalRelativeAngle(absBearing - getGunHeadingRadians())) / Rules.GUN_TURN_RATE_RADIANS;
-        double myPredX = getX() + Math.sin(getHeadingRadians()) * getVelocity() * gunTurnTicks;
-        double myPredY = getY() + Math.cos(getHeadingRadians()) * getVelocity() * gunTurnTicks;
-        double predX = ex, predY = ey, simHeading = e.getHeadingRadians();
-        
-        for (int i = 0; i < 100; i++) {
-            if (i >= (Math.hypot(myPredX - predX, myPredY - predY) / bulletSpeed) + gunTurnTicks) break;
-            simHeading += data.avgHeadingChange;
-            predX = Math.max(18, Math.min(getBattleFieldWidth() - 18, predX + Math.sin(simHeading) * data.avgVelocity));
-            predY = Math.max(18, Math.min(getBattleFieldHeight() - 18, predY + Math.cos(simHeading) * data.avgVelocity));
+            riscoTotal += riscoBase * multiplicadorRota * multiplicadorEvasao;
         }
         
-        double baseArmaAngle = Math.atan2(predX - myPredX, predY - myPredY);
-        double finalAngle = baseArmaAngle + (((double)(bestIndex - 15) / 15.0) * Math.asin(8.0 / bulletSpeed) * lateralDirection);
-        double gunTurn = Utils.normalRelativeAngle(finalAngle - getGunHeadingRadians());
-        setTurnGunRightRadians(gunTurn);
-
-        if (getGunHeat() == 0 && Math.abs(gunTurn) <= Math.max(Math.atan(36.0 / e.getDistance()), 0.05)) {
-            setFire(firePower);
-            Wave w = new Wave(); w.startX = getX(); w.startY = getY(); w.fireTime = getTime();
-            w.bulletSpeed = bulletSpeed; w.armaPredictedAngle = baseArmaAngle; w.direction = lateralDirection; 
-            w.enemyName = e.getName();
-            w.segments = currentSegs; w.features = currentFeatures; 
-            w.kdTreePredictedIndex = currentKdBestIndex; // Salva para conferência futura
-            activeWaves.add(w);
+        // VOTO 4: Penalidade Curva Brusca (Apenas se não houver inimigos ativos e precisar se mover)
+        if (!existeInimigoVivo) {
+            riscoTotal += (1 + Math.abs(Utilitario.anguloAbsoluto(meuRobo, pontoAlvo) - getHeadingRadians()));
         }
-    }
-
-    public void onHitWall(HitWallEvent e) { moveDirection *= -1; totalBearingChange = 0; }
-    public void onHitRobot(HitRobotEvent e) { moveDirection *= -1; }
-    public void onRobotDeath(RobotDeathEvent e) {
-        if (e.getName().equals(trackName)) { trackName = null; closestDistance = 10000; }
+        
+        return riscoTotal;
     }
 }
+
