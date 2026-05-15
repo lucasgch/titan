@@ -8,7 +8,7 @@ import java.util.*;
 
 /**
  * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * Versão VANGUARD PATCH 3.0: Letalidade Progressiva (Dynamic Firepower baseado no treino da IA).
+ * Versão VANGUARD PATCH 2.0: Segmentação Multidimensional de Guess Factor e Punição Extrema de VG.
  */
 public class BT_7274 extends AdvancedRobot {
 
@@ -31,7 +31,7 @@ public class BT_7274 extends AdvancedRobot {
     static class Wave { 
         double startX, startY, bulletSpeed, armaPredictedAngle; 
         int direction; long fireTime; String enemyName; 
-        int[] segments; 
+        int[] segments; // Armazena as condições do inimigo na hora do tiro
     }
     
     static class EnemyVirtualWave {
@@ -44,7 +44,10 @@ public class BT_7274 extends AdvancedRobot {
 
     static class EnemyData {
         double avgVelocity = 0, avgHeadingChange = 0, lastHeading = 0, lastVelocity = 0;
+        
+        // MATRIZ MULTIDIMENSIONAL DE GUESS FACTOR: [Distância][Velocidade][Aceleração][Parede][Bins de Erro]
         int[][][][][] guessFactors = new int[3][3][3][2][31]; 
+        
         boolean isClinger = false;
         int closeTicks = 0;
         double[] enemyGunScores = new double[5]; 
@@ -54,7 +57,7 @@ public class BT_7274 extends AdvancedRobot {
             avgVelocity = (v * 0.7) + (avgVelocity * 0.3);
             avgHeadingChange = (hChange * 0.7) + (avgHeadingChange * 0.3);
             lastHeading = h;
-            lastVelocity = v; 
+            lastVelocity = v; // Guarda a velocidade para calcular aceleração no próximo tick
 
             if (!isClinger) {
                 if (dist < 45) { closeTicks++; if (closeTicks > 20) isClinger = true; } 
@@ -104,6 +107,7 @@ public class BT_7274 extends AdvancedRobot {
             int lateralDirection = (e.getVelocity() * Math.sin(e.getHeadingRadians() - absBearing) >= 0) ? 1 : -1;
             int myLateralDirection = (getVelocity() * Math.sin(getHeadingRadians() - (absBearing + Math.PI)) >= 0) ? 1 : -1;
 
+            // --- PUNIÇÃO EXTREMA E AVALIAÇÃO DE ARMAS VIRTUAIS DO INIMIGO ---
             double energyDrop = lastEnemyEnergy - e.getEnergy();
             if (energyDrop > 0 && energyDrop <= 3.0) {
                 EnemyVirtualWave evw = new EnemyVirtualWave();
@@ -134,8 +138,12 @@ public class BT_7274 extends AdvancedRobot {
                         double myActualBearing = Math.atan2(getX() - evw.fireLoc.x, getY() - evw.fireLoc.y);
                         for (int j = 0; j < 5; j++) {
                             double error = Math.abs(Utils.normalRelativeAngle(myActualBearing - evw.predictedBearings[j]));
+                            
+                            // PUNIÇÃO SEVERA: A pontuação de toda arma perde 15% por "idade". 
+                            // Erros altos geram subtração na pontuação. Apenas tiros na mosca aumentam o placar.
                             data.enemyGunScores[j] *= 0.85; 
-                            data.enemyGunScores[j] += (2.0 - (error * 8.0)); 
+                            double reward = 2.0 - (error * 8.0); // Se o erro for maior que ~0.25 radianos, o reward é negativo.
+                            data.enemyGunScores[j] += reward; 
                         }
                     }
                     enemyVirtualWaves.remove(i--);
@@ -144,6 +152,7 @@ public class BT_7274 extends AdvancedRobot {
 
             doWallSmoothingMovement(e, data, absBearing);
             
+            // Calcula as condições exatas do inimigo AGORA para segmentar a mira
             int[] currentSegments = calculateSegments(e, ex, ey, previousEnemyVelocity);
             doAiming(e, data, absBearing, lateralDirection, ex, ey, currentSegments);
 
@@ -152,14 +161,23 @@ public class BT_7274 extends AdvancedRobot {
         }
     }
 
+    // --- CÁLCULO DE SEGMENTOS ---
     private int[] calculateSegments(ScannedRobotEvent e, double ex, double ey, double lastEnemyVel) {
+        // 1. Distância
         int distIdx = e.getDistance() < 250 ? 0 : (e.getDistance() < 500 ? 1 : 2);
+        
+        // 2. Velocidade
         double absVel = Math.abs(e.getVelocity());
         int velIdx = absVel < 2 ? 0 : (absVel < 6 ? 1 : 2);
+        
+        // 3. Aceleração (Comparando velocidade atual com a do tick anterior)
         double deltaV = absVel - Math.abs(lastEnemyVel);
-        int accIdx = deltaV < -0.5 ? 0 : (deltaV > 0.5 ? 2 : 1);
+        int accIdx = deltaV < -0.5 ? 0 : (deltaV > 0.5 ? 2 : 1); // 0: Desacelerando, 1: Constante, 2: Acelerando
+        
+        // 4. Proximidade da Parede (Inimigo)
         double pad = 120;
         int wallIdx = (ex < pad || ey < pad || ex > getBattleFieldWidth() - pad || ey > getBattleFieldHeight() - pad) ? 1 : 0;
+        
         return new int[]{distIdx, velIdx, accIdx, wallIdx};
     }
 
@@ -177,13 +195,17 @@ public class BT_7274 extends AdvancedRobot {
         for (int i = 0; i < 100; i++) {
             double testX = x + Math.sin(wallSmoothingAngle) * wallStick * moveDirection;
             double testY = y + Math.cos(wallSmoothingAngle) * wallStick * moveDirection;
+            
             if (testX < 18 || testY < 18 || testX > width - 18 || testY > height - 18) {
                 wallSmoothingAngle += 0.1 * moveDirection;
-            } else break;
+            } else {
+                break;
+            }
         }
 
         setTurnRightRadians(Utils.normalRelativeAngle(wallSmoothingAngle - getHeadingRadians()));
-        setMaxVelocity(8); setAhead(100 * moveDirection);
+        setMaxVelocity(8);
+        setAhead(100 * moveDirection);
 
         if (lastAbsBearing != 0) totalBearingChange += Math.abs(Utils.normalRelativeAngle(absBearing - lastAbsBearing));
         lastAbsBearing = absBearing;
@@ -196,7 +218,7 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     private void doAiming(ScannedRobotEvent e, EnemyData data, double absBearing, int lateralDirection, double ex, double ey, int[] currentSegs) {
-        // --- 1. RESOLUÇÃO DE ONDAS NO AR ---
+        // ATUALIZAÇÃO DO GUESS FACTOR COM BASE NO SEGMENTO SALVO NA ONDA
         for (int i = 0; i < activeWaves.size(); i++) {
             Wave w = activeWaves.get(i);
             if ((getTime() - w.fireTime) * w.bulletSpeed > Point2D.distance(w.startX, w.startY, ex, ey) - 18) {
@@ -206,6 +228,7 @@ public class BT_7274 extends AdvancedRobot {
                     int index = (int) Math.round(((error / Math.asin(8.0 / w.bulletSpeed)) * 15) + 15);
                     index = Math.max(0, Math.min(30, index));
                     
+                    // Incrementa no balde ESPECÍFICO das condições em que o tiro foi disparado
                     int[] s = w.segments;
                     data.guessFactors[s[0]][s[1]][s[2]][s[3]][index]++; 
                 }
@@ -213,41 +236,10 @@ public class BT_7274 extends AdvancedRobot {
             }
         }
 
-        // --- 2. CÁLCULO DE CONFIANÇA (TREINAMENTO DA IA) ---
-        int[] specificBins = data.guessFactors[currentSegs[0]][currentSegs[1]][currentSegs[2]][currentSegs[3]];
-        int bestIndex = 15; 
-        int highestConfidence = 0; // Quantas vezes acertamos NESSE cenário exato
-        for (int i = 0; i < 31; i++) {
-            if (specificBins[i] > highestConfidence) {
-                highestConfidence = specificBins[i];
-                bestIndex = i;
-            }
-        }
-
-        double bestDefenseScore = data.enemyGunScores[data.getBestEnemyGun()]; // Nossa segurança
-
-        // --- 3. PODER DE FOGO DINÂMICO (NOVO) ---
-        // Começamos atirando fraco (1.0) para coletar dados sem gastar energia à toa.
-        double basePower = 1.0; 
-        
-        // Bônus ofensivo: +0.4 de força para cada hit mapeado nesse segmento (máx +1.5)
-        double gfBonus = Math.min(1.5, highestConfidence * 0.4); 
-        
-        // Bônus defensivo: Se estamos desviando bem (score > 5), podemos nos dar ao luxo de gastar bateria
-        double defenseBonus = (bestDefenseScore > 5.0) ? 0.5 : 0.0;
-
-        double firePower = basePower + gfBonus + defenseBonus;
-        
-        // Travas de segurança do sistema
-        firePower = Math.min(firePower, 400.0 / Math.max(1, e.getDistance())); // Tiros longos são mais fracos
-        firePower = Math.min(firePower, 3.0); // Limite hard do canhão
-        firePower = Math.min(firePower, getEnergy() / 6.0); // Preserva a própria energia se estiver morrendo
-        firePower = Math.min(firePower, (e.getEnergy() / 4.0) + 0.1); // Não dá overkill atirando 3.0 num inimigo com 0.5 HP
-        firePower = Math.max(0.1, firePower); // Força mínima
-
+        double firePower = Math.min(3.0, 400.0 / e.getDistance());
         double bulletSpeed = 20 - (3 * firePower);
         
-        // --- 4. PREDIÇÃO DO CANHÃO (ARMA + GF) ---
+        // Simulação base do ARMA para achar o eixo central
         double gunTurnTicks = Math.abs(Utils.normalRelativeAngle(absBearing - getGunHeadingRadians())) / Rules.GUN_TURN_RATE_RADIANS;
         double myPredX = getX() + Math.sin(getHeadingRadians()) * getVelocity() * gunTurnTicks;
         double myPredY = getY() + Math.cos(getHeadingRadians()) * getVelocity() * gunTurnTicks;
@@ -261,6 +253,16 @@ public class BT_7274 extends AdvancedRobot {
         }
         
         double baseArmaAngle = Math.atan2(predX - myPredX, predY - myPredY);
+        
+        // RECUPERA OS DADOS ESPECÍFICOS DO SEGMENTO ATUAL
+        int[] specificBins = data.guessFactors[currentSegs[0]][currentSegs[1]][currentSegs[2]][currentSegs[3]];
+        int bestIndex = 15; 
+        for (int i = 0; i < 31; i++) {
+            if (specificBins[i] > specificBins[bestIndex]) {
+                bestIndex = i;
+            }
+        }
+        
         double finalAngle = baseArmaAngle + (((double)(bestIndex - 15) / 15.0) * Math.asin(8.0 / bulletSpeed) * lateralDirection);
         double gunTurn = Utils.normalRelativeAngle(finalAngle - getGunHeadingRadians());
         setTurnGunRightRadians(gunTurn);
@@ -270,7 +272,7 @@ public class BT_7274 extends AdvancedRobot {
             Wave w = new Wave(); w.startX = getX(); w.startY = getY(); w.fireTime = getTime();
             w.bulletSpeed = bulletSpeed; w.armaPredictedAngle = baseArmaAngle; w.direction = lateralDirection; 
             w.enemyName = e.getName();
-            w.segments = currentSegs; 
+            w.segments = currentSegs; // Grava o "estado" na onda!
             activeWaves.add(w);
         }
     }
