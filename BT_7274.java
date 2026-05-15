@@ -8,7 +8,7 @@ import java.util.*;
 
 /**
  * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * Versão VANGUARD: Detecção de Mira Inimiga (5 Tipos) + Mutação de Movimento + Adaptação Melee/1v1.
+ * Versão VANGUARD PATCH 1: Correção de Radar Lock pós-abate.
  */
 public class BT_7274 extends AdvancedRobot {
 
@@ -47,7 +47,6 @@ public class BT_7274 extends AdvancedRobot {
         boolean isClinger = false;
         int closeTicks = 0;
         
-        // Placar de detecção de mira do inimigo
         double[] enemyGunScores = new double[5]; 
 
         void updateStats(double v, double h, double dist) {
@@ -70,8 +69,12 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     public void run() {
-        setBodyColor(new Color(30, 40, 30)); setGunColor(new Color(255, 140, 0)); setRadarColor(new Color(20, 20, 20));
-        setAdjustGunForRobotTurn(true); setAdjustRadarForGunTurn(true); setAdjustRadarForRobotTurn(true);
+        setBodyColor(new Color(30, 40, 30)); 
+        setGunColor(new Color(255, 140, 0)); 
+        setRadarColor(new Color(20, 20, 20));
+        setAdjustGunForRobotTurn(true); 
+        setAdjustRadarForGunTurn(true); 
+        setAdjustRadarForRobotTurn(true);
 
         while (true) {
             // CORREÇÃO AQUI: Força o radar a girar se perder o alvo ou se parar de se mover
@@ -100,7 +103,6 @@ public class BT_7274 extends AdvancedRobot {
             int lateralDirection = (e.getVelocity() * Math.sin(e.getHeadingRadians() - absBearing) >= 0) ? 1 : -1;
             int myLateralDirection = (getVelocity() * Math.sin(getHeadingRadians() - (absBearing + Math.PI)) >= 0) ? 1 : -1;
 
-            // --- DETECÇÃO DE DISPARO INIMIGO E ONDAS VIRTUAIS ---
             double energyDrop = lastEnemyEnergy - e.getEnergy();
             if (energyDrop > 0 && energyDrop <= 3.0) {
                 EnemyVirtualWave evw = new EnemyVirtualWave();
@@ -112,17 +114,11 @@ public class BT_7274 extends AdvancedRobot {
                 double flightTime = e.getDistance() / evw.bulletSpeed;
                 double myTurnRate = getHeadingRadians() - myLastHeading;
                 
-                // Simulação dos 5 tipos de mira do inimigo:
-                // 0. Head-On (Direta)
                 evw.predictedBearings[0] = absBearing + Math.PI; 
-                // 1. Linear
                 evw.predictedBearings[1] = Math.atan2((getX() + Math.sin(getHeadingRadians()) * getVelocity() * flightTime) - ex, (getY() + Math.cos(getHeadingRadians()) * getVelocity() * flightTime) - ey);
-                // 2. Circular
                 evw.predictedBearings[2] = Math.atan2((getX() + Math.sin(getHeadingRadians() + myTurnRate * flightTime) * getVelocity() * flightTime) - ex, (getY() + Math.cos(getHeadingRadians() + myTurnRate * flightTime) * getVelocity() * flightTime) - ey);
-                // 3. GFT (Assume que o inimigo atira no nosso ângulo máximo de escape estatístico)
                 double maxMyEscape = Math.asin(8.0 / evw.bulletSpeed);
                 evw.predictedBearings[3] = (absBearing + Math.PI) + (maxMyEscape * 0.8 * myLateralDirection);
-                // 4. ARMA/ARIMA (Preditiva Complexa - Tenta antecipar que vamos frear ou inverter)
                 evw.predictedBearings[4] = (absBearing + Math.PI) - (maxMyEscape * 0.5 * myLateralDirection);
 
                 enemyVirtualWaves.add(evw);
@@ -130,16 +126,13 @@ public class BT_7274 extends AdvancedRobot {
             lastEnemyEnergy = e.getEnergy();
             myLastHeading = getHeadingRadians();
 
-            // --- PROCESSAR ONDAS VIRTUAIS (APRENDER A MIRA DELE) ---
             for (int i = 0; i < enemyVirtualWaves.size(); i++) {
                 EnemyVirtualWave evw = enemyVirtualWaves.get(i);
                 if ((getTime() - evw.fireTime) * evw.bulletSpeed > Point2D.distance(evw.fireLoc.x, evw.fireLoc.y, getX(), getY())) {
                     if (evw.enemyName.equals(e.getName())) {
                         double myActualBearing = Math.atan2(getX() - evw.fireLoc.x, getY() - evw.fireLoc.y);
-                        // Verifica qual das 5 miras virtuais chegou mais perto de onde estamos agora
                         for (int j = 0; j < 5; j++) {
                             double error = Math.abs(Utils.normalRelativeAngle(myActualBearing - evw.predictedBearings[j]));
-                            // Quanto menor o erro, mais pontos a mira virtual ganha
                             data.enemyGunScores[j] += Math.max(0, 1.0 - error);
                         }
                     }
@@ -147,10 +140,7 @@ public class BT_7274 extends AdvancedRobot {
                 }
             }
 
-            // --- MOVIMENTAÇÃO MUTÁVEL BASEADA NA DETECÇÃO ---
             doAdaptiveMovement(e, data, absBearing);
-
-            // --- MIRA E TELEMETRIA (Seu chassi ARMA+GFT anterior) ---
             doAiming(e, data, absBearing, lateralDirection, ex, ey);
 
             setTurnRadarRightRadians(Utils.normalRelativeAngle(absBearing - getRadarHeadingRadians()) * 2);
@@ -159,19 +149,16 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     private void doAdaptiveMovement(ScannedRobotEvent e, EnemyData data, double absBearing) {
-        double desiredDist = 200; // Padrão
+        double desiredDist = 200; 
         double turnAngle = e.getBearingRadians() + (Math.PI / 2);
         
-        // 1. ANÁLISE DE CAMPO (Melee vs 1v1)
         if (getOthers() > 1) {
-            // MELEE: Sobrevivência Mínima. Evita o centro, mantém muita distância (Kiting).
             desiredDist = 400;
-            setMaxVelocity(6); // Conservador para não bater
+            setMaxVelocity(6); 
             turnAngle -= ((e.getDistance() - desiredDist) * 0.01 * moveDirection);
             setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
             setAhead(100 * moveDirection);
         } else {
-            // 1v1: Adaptação de Combate Ativa baseada na mira detectada
             int detectedGun = data.getBestEnemyGun();
             double aggression = (data.isClinger || e.getDistance() < 30) ? 0.02 : 0.005;
             desiredDist = data.isClinger ? 250 : 150;
@@ -179,51 +166,40 @@ public class BT_7274 extends AdvancedRobot {
 
             setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
 
-            // Rastreamento Orbital para inversões seguras
             if (lastAbsBearing != 0) totalBearingChange += Math.abs(Utils.normalRelativeAngle(absBearing - lastAbsBearing));
             lastAbsBearing = absBearing;
 
             switch (detectedGun) {
-                case 0: // CONTRA HEAD-ON: Ficar rápido e manter a órbita constante.
+                case 0: 
                     setMaxVelocity(8);
                     setAhead(150 * moveDirection);
                     if (totalBearingChange >= 2 * Math.PI) { orbitCounter++; totalBearingChange = 0; }
                     if (orbitCounter >= randomOrbitLimit) { moveDirection *= -1; orbitCounter = 0; randomOrbitLimit = 3 + (int)(Math.random() * 4); }
                     break;
-                    
-                case 1: // CONTRA LINEAR: Stop & Go. Acelera e freia para quebrar a matemática x=v*t.
+                case 1: 
                     setMaxVelocity((getTime() % 30 < 15) ? 8 : 0);
                     setAhead(100 * moveDirection);
                     break;
-                    
-                case 2: // CONTRA CIRCULAR: Wobble Orbit. Muda o raio da órbita bruscamente.
+                case 2: 
                     setMaxVelocity(8);
-                    setTurnRightRadians(Utils.normalRelativeAngle(turnAngle + (Math.sin(getTime() / 10.0) * 0.5))); // Tremedeira
+                    setTurnRightRadians(Utils.normalRelativeAngle(turnAngle + (Math.sin(getTime() / 10.0) * 0.5))); 
                     setAhead(100 * moveDirection);
                     break;
-                    
-                case 3: // CONTRA GFT: Achatamento Estatístico. Direções verdadeiramente caóticas (Surfing Aleatório).
+                case 3: 
                     setMaxVelocity(Math.random() > 0.2 ? 8 : 4);
-                    if (Math.random() < 0.03) moveDirection *= -1; // Chance randômica de inversão sem aviso
+                    if (Math.random() < 0.03) moveDirection *= -1; 
                     setAhead(150 * moveDirection);
                     break;
-                    
-                case 4: // CONTRA ARMA/ARIMA: Quebra de Padrão. Oscilação rápida e curta.
+                case 4: 
                     setMaxVelocity(6 + Math.sin(getTime() / 5.0) * 2);
                     if (getTime() % (15 + (int)(Math.random() * 20)) == 0) moveDirection *= -1;
                     setAhead(80 * moveDirection);
                     break;
             }
-            
-            // Telemetria Console
-            if (getTime() % 50 == 0) {
-                String[] miras = {"Head-On", "Linear", "Circular", "GFT", "ARIMA/Preditiva"};
-                out.println("Tático - Ameaça: [" + miras[detectedGun] + "] | Modo de Defesa Engajado.");
-            }
         }
+    }
 
     private void doAiming(ScannedRobotEvent e, EnemyData data, double absBearing, int lateralDirection, double ex, double ey) {
-        // [CÓDIGO DE MIRA MANTIDO IGUAL À VERSÃO ANTERIOR (Otimizado por espaço)]
         for (int i = 0; i < activeWaves.size(); i++) {
             Wave w = activeWaves.get(i);
             if ((getTime() - w.fireTime) * w.bulletSpeed > Point2D.distance(w.startX, w.startY, ex, ey) - 18) {
@@ -269,7 +245,20 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     public void onHitWall(HitWallEvent e) { moveDirection *= -1; totalBearingChange = 0; }
-    public void onHitRobot(HitRobotEvent e) { moveDirection *= -1; totalBearingChange = 0; }
+    
+    public void onHitRobot(HitRobotEvent e) { 
+        moveDirection *= -1; 
+        totalBearingChange = 0; 
+        EnemyData data = enemyMap.getOrDefault(e.getName(), new EnemyData());
+        data.isClinger = true;
+        enemyMap.put(e.getName(), data);
+    }
 
-    //teste commit
+    // CORREÇÃO AQUI: O evento que limpa a memória do robô destruído
+    public void onRobotDeath(RobotDeathEvent e) {
+        if (e.getName().equals(trackName)) {
+            trackName = null;
+            closestDistance = 10000;
+        }
+    }
 }
