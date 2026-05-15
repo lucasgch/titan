@@ -8,7 +8,7 @@ import java.util.*;
 
 /**
  * BT_7274 - "Protocolo 3: Proteger o Piloto"
- * Versão VANGUARD PATCH 1: Correção de Radar Lock pós-abate.
+ * Versão VANGUARD PATCH 3.0: Letalidade Progressiva (Dynamic Firepower baseado no treino da IA).
  */
 public class BT_7274 extends AdvancedRobot {
 
@@ -23,30 +23,30 @@ public class BT_7274 extends AdvancedRobot {
     private double lastEnemyEnergy = 100;
     private double myLastHeading = 0;
     
-    // --- VARIÁVEIS DE ORBITA E MUTAÇÃO ---
     private double totalBearingChange = 0;
     private double lastAbsBearing = 0;
     private int orbitCounter = 0;
     private int randomOrbitLimit = 2 + (int)(Math.random() * 6);
 
-    // --- ESTRUTURAS DE ONDAS ---
-    static class Wave { double startX, startY, bulletSpeed, armaPredictedAngle; int direction; long fireTime; String enemyName; }
+    static class Wave { 
+        double startX, startY, bulletSpeed, armaPredictedAngle; 
+        int direction; long fireTime; String enemyName; 
+        int[] segments; 
+    }
     
     static class EnemyVirtualWave {
         Point2D.Double fireLoc;
         long fireTime;
         double bulletSpeed;
-        double[] predictedBearings = new double[5]; // 0:HO, 1:Linear, 2:Circular, 3:GFT, 4:ARMA/ARIMA
+        double[] predictedBearings = new double[5]; 
         String enemyName;
     }
 
-    // --- DADOS TÁTICOS DO INIMIGO ---
     static class EnemyData {
-        double avgVelocity = 0, avgHeadingChange = 0, lastHeading = 0;
-        int[] armaErrorBins = new int[31]; 
+        double avgVelocity = 0, avgHeadingChange = 0, lastHeading = 0, lastVelocity = 0;
+        int[][][][][] guessFactors = new int[3][3][3][2][31]; 
         boolean isClinger = false;
         int closeTicks = 0;
-        
         double[] enemyGunScores = new double[5]; 
 
         void updateStats(double v, double h, double dist) {
@@ -54,6 +54,7 @@ public class BT_7274 extends AdvancedRobot {
             avgVelocity = (v * 0.7) + (avgVelocity * 0.3);
             avgHeadingChange = (hChange * 0.7) + (avgHeadingChange * 0.3);
             lastHeading = h;
+            lastVelocity = v; 
 
             if (!isClinger) {
                 if (dist < 45) { closeTicks++; if (closeTicks > 20) isClinger = true; } 
@@ -77,7 +78,6 @@ public class BT_7274 extends AdvancedRobot {
         setAdjustRadarForRobotTurn(true);
 
         while (true) {
-            // CORREÇÃO AQUI: Força o radar a girar se perder o alvo ou se parar de se mover
             if (trackName == null || getRadarTurnRemaining() == 0) {
                 setTurnRadarRight(360);
             }
@@ -86,7 +86,6 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     public void onScannedRobot(ScannedRobotEvent e) {
-        // CORREÇÃO: Limpa o alvo se ele sumir do radar por mais de 5 ticks
         if (getTime() - lastScanTime > 5) closestDistance = 10000;
 
         if (trackName == null || e.getName().equals(trackName) || e.getDistance() < closestDistance || getOthers() > 1) {
@@ -95,6 +94,8 @@ public class BT_7274 extends AdvancedRobot {
             lastScanTime = getTime();
 
             EnemyData data = enemyMap.getOrDefault(e.getName(), new EnemyData());
+            double previousEnemyVelocity = data.lastVelocity;
+            
             data.updateStats(e.getVelocity(), e.getHeadingRadians(), e.getDistance());
 
             double absBearing = getHeadingRadians() + e.getBearingRadians();
@@ -133,73 +134,69 @@ public class BT_7274 extends AdvancedRobot {
                         double myActualBearing = Math.atan2(getX() - evw.fireLoc.x, getY() - evw.fireLoc.y);
                         for (int j = 0; j < 5; j++) {
                             double error = Math.abs(Utils.normalRelativeAngle(myActualBearing - evw.predictedBearings[j]));
-                            data.enemyGunScores[j] += Math.max(0, 1.0 - error);
+                            data.enemyGunScores[j] *= 0.85; 
+                            data.enemyGunScores[j] += (2.0 - (error * 8.0)); 
                         }
                     }
                     enemyVirtualWaves.remove(i--);
                 }
             }
 
-            doAdaptiveMovement(e, data, absBearing);
-            doAiming(e, data, absBearing, lateralDirection, ex, ey);
+            doWallSmoothingMovement(e, data, absBearing);
+            
+            int[] currentSegments = calculateSegments(e, ex, ey, previousEnemyVelocity);
+            doAiming(e, data, absBearing, lateralDirection, ex, ey, currentSegments);
 
             setTurnRadarRightRadians(Utils.normalRelativeAngle(absBearing - getRadarHeadingRadians()) * 2);
             enemyMap.put(e.getName(), data);
         }
     }
 
-    private void doAdaptiveMovement(ScannedRobotEvent e, EnemyData data, double absBearing) {
-        double desiredDist = 200; 
-        double turnAngle = e.getBearingRadians() + (Math.PI / 2);
-        
-        if (getOthers() > 1) {
-            desiredDist = 400;
-            setMaxVelocity(6); 
-            turnAngle -= ((e.getDistance() - desiredDist) * 0.01 * moveDirection);
-            setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
-            setAhead(100 * moveDirection);
-        } else {
-            int detectedGun = data.getBestEnemyGun();
-            double aggression = (data.isClinger || e.getDistance() < 30) ? 0.02 : 0.005;
-            desiredDist = data.isClinger ? 250 : 150;
-            turnAngle -= ((e.getDistance() - desiredDist) * aggression * moveDirection);
+    private int[] calculateSegments(ScannedRobotEvent e, double ex, double ey, double lastEnemyVel) {
+        int distIdx = e.getDistance() < 250 ? 0 : (e.getDistance() < 500 ? 1 : 2);
+        double absVel = Math.abs(e.getVelocity());
+        int velIdx = absVel < 2 ? 0 : (absVel < 6 ? 1 : 2);
+        double deltaV = absVel - Math.abs(lastEnemyVel);
+        int accIdx = deltaV < -0.5 ? 0 : (deltaV > 0.5 ? 2 : 1);
+        double pad = 120;
+        int wallIdx = (ex < pad || ey < pad || ex > getBattleFieldWidth() - pad || ey > getBattleFieldHeight() - pad) ? 1 : 0;
+        return new int[]{distIdx, velIdx, accIdx, wallIdx};
+    }
 
-            setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
+    private void doWallSmoothingMovement(ScannedRobotEvent e, EnemyData data, double absBearing) {
+        double desiredDist = (getOthers() > 1) ? 400 : 150;
+        if (data.isClinger) desiredDist = 250;
 
-            if (lastAbsBearing != 0) totalBearingChange += Math.abs(Utils.normalRelativeAngle(absBearing - lastAbsBearing));
-            lastAbsBearing = absBearing;
+        double wallSmoothingAngle = absBearing + (Math.PI / 2) * moveDirection;
+        double distAdjustment = (e.getDistance() - desiredDist) / desiredDist;
+        wallSmoothingAngle -= (distAdjustment * 0.5 * moveDirection);
 
-            switch (detectedGun) {
-                case 0: 
-                    setMaxVelocity(8);
-                    setAhead(150 * moveDirection);
-                    if (totalBearingChange >= 2 * Math.PI) { orbitCounter++; totalBearingChange = 0; }
-                    if (orbitCounter >= randomOrbitLimit) { moveDirection *= -1; orbitCounter = 0; randomOrbitLimit = 3 + (int)(Math.random() * 4); }
-                    break;
-                case 1: 
-                    setMaxVelocity((getTime() % 30 < 15) ? 8 : 0);
-                    setAhead(100 * moveDirection);
-                    break;
-                case 2: 
-                    setMaxVelocity(8);
-                    setTurnRightRadians(Utils.normalRelativeAngle(turnAngle + (Math.sin(getTime() / 10.0) * 0.5))); 
-                    setAhead(100 * moveDirection);
-                    break;
-                case 3: 
-                    setMaxVelocity(Math.random() > 0.2 ? 8 : 4);
-                    if (Math.random() < 0.03) moveDirection *= -1; 
-                    setAhead(150 * moveDirection);
-                    break;
-                case 4: 
-                    setMaxVelocity(6 + Math.sin(getTime() / 5.0) * 2);
-                    if (getTime() % (15 + (int)(Math.random() * 20)) == 0) moveDirection *= -1;
-                    setAhead(80 * moveDirection);
-                    break;
+        double x = getX(), y = getY(), width = getBattleFieldWidth(), height = getBattleFieldHeight();
+        double wallStick = 140; 
+
+        for (int i = 0; i < 100; i++) {
+            double testX = x + Math.sin(wallSmoothingAngle) * wallStick * moveDirection;
+            double testY = y + Math.cos(wallSmoothingAngle) * wallStick * moveDirection;
+            if (testX < 18 || testY < 18 || testX > width - 18 || testY > height - 18) {
+                wallSmoothingAngle += 0.1 * moveDirection;
+            } else break;
+        }
+
+        setTurnRightRadians(Utils.normalRelativeAngle(wallSmoothingAngle - getHeadingRadians()));
+        setMaxVelocity(8); setAhead(100 * moveDirection);
+
+        if (lastAbsBearing != 0) totalBearingChange += Math.abs(Utils.normalRelativeAngle(absBearing - lastAbsBearing));
+        lastAbsBearing = absBearing;
+        if (totalBearingChange >= 2 * Math.PI) {
+            totalBearingChange = 0; orbitCounter++;
+            if (orbitCounter >= randomOrbitLimit) {
+                moveDirection *= -1; orbitCounter = 0; randomOrbitLimit = 3 + (int)(Math.random() * 4);
             }
         }
     }
 
-    private void doAiming(ScannedRobotEvent e, EnemyData data, double absBearing, int lateralDirection, double ex, double ey) {
+    private void doAiming(ScannedRobotEvent e, EnemyData data, double absBearing, int lateralDirection, double ex, double ey, int[] currentSegs) {
+        // --- 1. RESOLUÇÃO DE ONDAS NO AR ---
         for (int i = 0; i < activeWaves.size(); i++) {
             Wave w = activeWaves.get(i);
             if ((getTime() - w.fireTime) * w.bulletSpeed > Point2D.distance(w.startX, w.startY, ex, ey) - 18) {
@@ -207,20 +204,55 @@ public class BT_7274 extends AdvancedRobot {
                     double actualAngle = Math.atan2(ex - w.startX, ey - w.startY);
                     double error = Utils.normalRelativeAngle(actualAngle - w.armaPredictedAngle) * w.direction;
                     int index = (int) Math.round(((error / Math.asin(8.0 / w.bulletSpeed)) * 15) + 15);
-                    data.armaErrorBins[Math.max(0, Math.min(30, index))]++; 
+                    index = Math.max(0, Math.min(30, index));
+                    
+                    int[] s = w.segments;
+                    data.guessFactors[s[0]][s[1]][s[2]][s[3]][index]++; 
                 }
                 activeWaves.remove(i--); 
             }
         }
 
-        double firePower = Math.min(3.0, 400.0 / e.getDistance());
+        // --- 2. CÁLCULO DE CONFIANÇA (TREINAMENTO DA IA) ---
+        int[] specificBins = data.guessFactors[currentSegs[0]][currentSegs[1]][currentSegs[2]][currentSegs[3]];
+        int bestIndex = 15; 
+        int highestConfidence = 0; // Quantas vezes acertamos NESSE cenário exato
+        for (int i = 0; i < 31; i++) {
+            if (specificBins[i] > highestConfidence) {
+                highestConfidence = specificBins[i];
+                bestIndex = i;
+            }
+        }
+
+        double bestDefenseScore = data.enemyGunScores[data.getBestEnemyGun()]; // Nossa segurança
+
+        // --- 3. PODER DE FOGO DINÂMICO (NOVO) ---
+        // Começamos atirando fraco (1.0) para coletar dados sem gastar energia à toa.
+        double basePower = 1.0; 
+        
+        // Bônus ofensivo: +0.4 de força para cada hit mapeado nesse segmento (máx +1.5)
+        double gfBonus = Math.min(1.5, highestConfidence * 0.4); 
+        
+        // Bônus defensivo: Se estamos desviando bem (score > 5), podemos nos dar ao luxo de gastar bateria
+        double defenseBonus = (bestDefenseScore > 5.0) ? 0.5 : 0.0;
+
+        double firePower = basePower + gfBonus + defenseBonus;
+        
+        // Travas de segurança do sistema
+        firePower = Math.min(firePower, 400.0 / Math.max(1, e.getDistance())); // Tiros longos são mais fracos
+        firePower = Math.min(firePower, 3.0); // Limite hard do canhão
+        firePower = Math.min(firePower, getEnergy() / 6.0); // Preserva a própria energia se estiver morrendo
+        firePower = Math.min(firePower, (e.getEnergy() / 4.0) + 0.1); // Não dá overkill atirando 3.0 num inimigo com 0.5 HP
+        firePower = Math.max(0.1, firePower); // Força mínima
+
         double bulletSpeed = 20 - (3 * firePower);
         
+        // --- 4. PREDIÇÃO DO CANHÃO (ARMA + GF) ---
         double gunTurnTicks = Math.abs(Utils.normalRelativeAngle(absBearing - getGunHeadingRadians())) / Rules.GUN_TURN_RATE_RADIANS;
         double myPredX = getX() + Math.sin(getHeadingRadians()) * getVelocity() * gunTurnTicks;
         double myPredY = getY() + Math.cos(getHeadingRadians()) * getVelocity() * gunTurnTicks;
-
         double predX = ex, predY = ey, simHeading = e.getHeadingRadians();
+        
         for (int i = 0; i < 100; i++) {
             if (i >= (Math.hypot(myPredX - predX, myPredY - predY) / bulletSpeed) + gunTurnTicks) break;
             simHeading += data.avgHeadingChange;
@@ -229,9 +261,6 @@ public class BT_7274 extends AdvancedRobot {
         }
         
         double baseArmaAngle = Math.atan2(predX - myPredX, predY - myPredY);
-        int bestIndex = 15; 
-        for (int i = 0; i < 31; i++) if (data.armaErrorBins[i] > data.armaErrorBins[bestIndex]) bestIndex = i;
-        
         double finalAngle = baseArmaAngle + (((double)(bestIndex - 15) / 15.0) * Math.asin(8.0 / bulletSpeed) * lateralDirection);
         double gunTurn = Utils.normalRelativeAngle(finalAngle - getGunHeadingRadians());
         setTurnGunRightRadians(gunTurn);
@@ -239,26 +268,16 @@ public class BT_7274 extends AdvancedRobot {
         if (getGunHeat() == 0 && Math.abs(gunTurn) <= Math.max(Math.atan(36.0 / e.getDistance()), 0.05)) {
             setFire(firePower);
             Wave w = new Wave(); w.startX = getX(); w.startY = getY(); w.fireTime = getTime();
-            w.bulletSpeed = bulletSpeed; w.armaPredictedAngle = baseArmaAngle; w.direction = lateralDirection; w.enemyName = e.getName();
+            w.bulletSpeed = bulletSpeed; w.armaPredictedAngle = baseArmaAngle; w.direction = lateralDirection; 
+            w.enemyName = e.getName();
+            w.segments = currentSegs; 
             activeWaves.add(w);
         }
     }
 
     public void onHitWall(HitWallEvent e) { moveDirection *= -1; totalBearingChange = 0; }
-    
-    public void onHitRobot(HitRobotEvent e) { 
-        moveDirection *= -1; 
-        totalBearingChange = 0; 
-        EnemyData data = enemyMap.getOrDefault(e.getName(), new EnemyData());
-        data.isClinger = true;
-        enemyMap.put(e.getName(), data);
-    }
-
-    // CORREÇÃO AQUI: O evento que limpa a memória do robô destruído
+    public void onHitRobot(HitRobotEvent e) { moveDirection *= -1; }
     public void onRobotDeath(RobotDeathEvent e) {
-        if (e.getName().equals(trackName)) {
-            trackName = null;
-            closestDistance = 10000;
-        }
+        if (e.getName().equals(trackName)) { trackName = null; closestDistance = 10000; }
     }
 }
