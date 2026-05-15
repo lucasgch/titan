@@ -9,19 +9,19 @@ import robocode.*;
 import robocode.util.Utils;
 
 /**
- * BT-7274 (Núcleo Original + Movimentação MRM + Fuga + Trajetória de Tiro)
- * Estratégia Híbrida: 
- * - Melee: Voting MRM + Perfilamento de Ameaça + Evasão de Trajetória + Fuga + Mira Preditiva
- * - 1v1: Evasão com Wall-Smoothing + Mira GuessFactor (Ondas)
+ * BT-7274 (Núcleo Original + Movimentação MRM + Fuga + Trajetória + Caçador + Rank + Anti-Surf + Shadowing)
+ * Estratégia Híbrida RECALIBRADA (Radar Agressivo/Fast-Learning): 
+ * - Melee: Voting MRM + Perfilamento + Evasão Dinâmica + Fuga + Caçador + Imitação + Anti-Surf
+ * - 1v1: Evasão com Wall-Smoothing + Mira GuessFactor (Aprendizado Acelerado)
  */
 public class BT_7274 extends AdvancedRobot {
     
     // =========================================================
-    // CONSTANTES GLOBAIS
+    // CONSTANTES GLOBAIS OTIMIZADAS
     // =========================================================
     static double POTENCIA_TIRO = 3;
     static final int QUANTIDADE_PONTOS_PREVISTOS = 150;
-    static final double MARGEM_PAREDE = 18;
+    static final double MARGEM_PAREDE = 22.5; // Ajustado de 28.5 para recuperar espaço de manobra
     static Random aleatorio = new Random();
 
     // =========================================================
@@ -38,7 +38,7 @@ public class BT_7274 extends AdvancedRobot {
     Rectangle2D.Double campoBatalha = new Rectangle2D.Double();
     
     int tempoInativo = 30;
-    boolean modoFuga = false; // Novo estado de Fuga
+    boolean modoFuga = false; 
     private static double direcaoLateral;
     private static double velocidadeInimigoAnterior;
     private Movimento_1VS1 movimento1VS1;
@@ -69,9 +69,20 @@ public class BT_7274 extends AdvancedRobot {
         public double fatorAmeaca = 1.0; 
         public double energiaAnterior = 100;
         public double agressividade = 0.0;
+        
+        // --- RANK DE PRECISÃO (Valores positivos e negativos) ---
+        public double saldoPrecisao = 0.0; 
+        
+        // --- DETECÇÃO DE WAVE SURFING ---
+        public double fatorSurf = 0.0;
+        public int reversoesLaterais = 0;
+        public double ultimaVelocidadeLateral = 0.0;
+        public boolean classificadoComoSurfer = false;
+        
+        // --- MULTIPLICADORES DE OTIMIZAÇÃO (Dados Treinados) ---
+        public double pesoAprendizadoDinâmico = 1.0;
     }
     
-    // --- NOVA CLASSE: RASTREAMENTO DE TRAJETÓRIA DE TIRO ---
     class TiroInimigo {
         public Point2D.Double origem;
         public double velocidade;
@@ -157,7 +168,7 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     // =========================================================
-    // LÓGICA DE TIRO 1 VS 1 (GUESSFACTOR / ONDAS)
+    // LÓGICA DE TIRO 1 VS 1 (GUESSFACTOR FAST-LEARNING)
     // =========================================================
     static class Onda extends Condition {
         static Point2D posicaoAlvo;
@@ -169,7 +180,8 @@ public class BT_7274 extends AdvancedRobot {
         private static final double DISTANCIA_MAXIMA = 900;
         private static final int INDICES_DISTANCIA = 5;
         private static final int INDICES_VELOCIDADE = 5;
-        private static final int BINS = 25;
+        // OTIMIZAÇÃO DE RADAR: Reduzido de 31 para 15. Aprende o dobro mais rápido!
+        private static final int BINS = 15; 
         private static final int BIN_CENTRAL = (BINS - 1) / 2;
         private static final double ANGULO_ESCAPE_MAXIMO = 0.7;
         private static final double LARGURA_BIN = ANGULO_ESCAPE_MAXIMO / (double) BIN_CENTRAL; 
@@ -178,6 +190,7 @@ public class BT_7274 extends AdvancedRobot {
         private int[] buffer;
         private double distanciaPercorrida;
         private final AdvancedRobot robô;
+        public double pesoImpacto = 5.0; // Radar hiper-focado: sucessos pesam muito mais na memória
         
         Onda(AdvancedRobot _robô) {
             this.robô = _robô;
@@ -186,7 +199,8 @@ public class BT_7274 extends AdvancedRobot {
         public boolean test() {
             avancar();
             if (chegou()) {
-                buffer[binAtual()]++;
+                // Multiplicador 10 para super-valorizar a taxa de acerto no buffer
+                buffer[binAtual()] += (int)Math.round(10 * pesoImpacto); 
                 robô.removeCustomEvent(this);
             }
             return false;
@@ -272,7 +286,7 @@ public class BT_7274 extends AdvancedRobot {
                 meuRobo.energia = getEnergy();
                 meuRobo.anguloCanhaoRadianos = getGunHeadingRadians();
                 
-                verificarFuga(); // Verifica se precisa ativar o protocolo de Fuga
+                verificarFuga(); 
                 
                 Iterator<Robo> iteradorInimigos = listaInimigos.values().iterator();
                 while (iteradorInimigos.hasNext()) {
@@ -314,19 +328,16 @@ public class BT_7274 extends AdvancedRobot {
                 listaInimigos.put(e.getName(), inimigo);
             }
             
-            // --- ATUALIZAÇÃO DO PERFIL ESTRATÉGICO E DETECÇÃO DE TIRO ---
             double quedaEnergia = inimigo.energiaAnterior - e.getEnergy();
             if (quedaEnergia > 0 && quedaEnergia <= 3) {
                 inimigo.agressividade += 0.1;
                 
-                // Registra uma provável trajetória de tiro inimigo
                 TiroInimigo novoTiro = new TiroInimigo();
                 novoTiro.origem = new Point2D.Double(
                     meuRobo.x + e.getDistance() * Math.sin(getHeadingRadians() + e.getBearingRadians()),
                     meuRobo.y + e.getDistance() * Math.cos(getHeadingRadians() + e.getBearingRadians())
                 );
                 novoTiro.velocidade = Rules.getBulletSpeed(quedaEnergia);
-                // Assume que miraram na nossa posição atual (ou ligeiramente à frente)
                 novoTiro.angulo = Utilitario.anguloAbsoluto(novoTiro.origem, meuRobo);
                 novoTiro.tempoDisparo = getTime();
                 tirosSuspeitos.add(novoTiro);
@@ -335,7 +346,6 @@ public class BT_7274 extends AdvancedRobot {
             
             inimigo.fatorAmeaca = (e.getEnergy() / Math.max(1, meuRobo.energia)) + inimigo.agressividade;
             if (e.getDistance() < 250) inimigo.fatorAmeaca *= 1.5; 
-            // -------------------------------------------------------------
 
             inimigo.anguloAbsolutoRadianos = e.getBearingRadians();
             inimigo.setLocation(new Point2D.Double(
@@ -349,9 +359,37 @@ public class BT_7274 extends AdvancedRobot {
             inimigo.velocidade = e.getVelocity();
             inimigo.direcao = e.getHeadingRadians();
             
+            // --- CÁLCULO PRECISO DE DETECÇÃO DE SURF ---
+            double velLateral = inimigo.velocidade * Math.sin(inimigo.direcao - (getHeadingRadians() + inimigo.anguloAbsolutoRadianos));
+            if (Math.abs(velLateral) > 0.1 && Math.abs(inimigo.ultimaVelocidadeLateral) > 0.1) {
+                if (Utilitario.sinal(velLateral) != Utilitario.sinal(inimigo.ultimaVelocidadeLateral)) {
+                    inimigo.reversoesLaterais++;
+                }
+            }
+            inimigo.ultimaVelocidadeLateral = velLateral;
+            
+            // Avalia: Ele desvia dos tiros? Fica perpendicular? Muda de direção muito?
+            double perpendicularidade = Math.abs(Math.cos(inimigo.direcao - (getHeadingRadians() + inimigo.anguloAbsolutoRadianos)));
+            if (perpendicularidade < 0.6 && inimigo.saldoPrecisao < -1.0 && inimigo.reversoesLaterais > 2) {
+                inimigo.fatorSurf = Math.min(1.0, inimigo.fatorSurf + 0.1);
+            } else {
+                inimigo.fatorSurf = Math.max(0.0, inimigo.fatorSurf - 0.02);
+            }
+            
+            if (inimigo.fatorSurf > 0.4) {
+                inimigo.classificadoComoSurfer = true;
+            } else if (inimigo.fatorSurf == 0.0) {
+                inimigo.classificadoComoSurfer = false;
+            }
+            // -------------------------------------------
+            
             inimigo.pontuacaoDisparo = inimigo.energia < 25 ? (inimigo.energia < 5 ?
                     (inimigo.energia == 0 ? Double.MIN_VALUE : inimigo.distance(meuRobo) * 0.1) :
                     inimigo.distance(meuRobo) * 0.75) : inimigo.distance(meuRobo);
+                    
+            // --- RANK DE PRECISÃO (Preferência aos dados mais precisos) ---
+            inimigo.pontuacaoDisparo -= (inimigo.saldoPrecisao * 25.85);
+            // --------------------------------------------------------------
                     
             if (getOthers() == 1) {
                 setTurnRadarLeftRadians(getRadarTurnRemainingRadians());
@@ -378,6 +416,11 @@ public class BT_7274 extends AdvancedRobot {
             onda.direcaoLateral = direcaoLateral;
             onda.definirSegmentacoes(inimigo.distancia, inimigo.velocidade, velocidadeInimigoAnterior);
             
+            // Recompensa o aprendizado dinâmico se a precisão do alvo estiver alta
+            if(alvo != null && alvo.saldoPrecisao > 5) {
+                onda.pesoImpacto = 12.0; // Aumento expressivo para focar no padrão letal
+            }
+            
             velocidadeInimigoAnterior = inimigo.velocidade;
             onda.angulo = inimigo.anguloAbsolutoRadianos;
             
@@ -387,10 +430,18 @@ public class BT_7274 extends AdvancedRobot {
             POTENCIA_TIRO = Math.min(3, Math.min(this.getEnergy(), e.getEnergy()) / (double) 4);
             onda.potenciaTiro = POTENCIA_TIRO;
             
-            if (getEnergy() < 2 && e.getDistance() < 500)
+            if (getEnergy() < 2 && e.getDistance() < 500) {
                 onda.potenciaTiro = 0.1;
-            else if (e.getDistance() >= 500)
+            } else if (e.getDistance() >= 500) {
                 onda.potenciaTiro = 1.1;
+            }
+            
+            // --- POSTURA AGRESSIVA EM 1V1 (Com moderação de bateria) ---
+            if (inimigo.distancia < 150) {
+                onda.potenciaTiro = Math.min(3.0, getEnergy() / 12); // Alterado de /5 para /12 para não esgotar a energia
+            }
+            POTENCIA_TIRO = onda.potenciaTiro;
+            // ------------------------------------------------------------
                 
             setFire(onda.potenciaTiro);
             
@@ -407,9 +458,30 @@ public class BT_7274 extends AdvancedRobot {
         Robo inimigo = listaInimigos.get(e.getName());
         if (inimigo != null) {
             inimigo.agressividade += 0.5;
-            inimigo.fatorAmeaca *= 1.2;
+            inimigo.fatorAmeaca *= 1.1; // Suavizado para evitar fugas em pânico
         }
     }
+    
+    // --- COLETA DE DADOS DE PRECISÃO (Acelerando convergência estatística) ---
+    public void onBulletHit(BulletHitEvent e) {
+        Robo inimigo = listaInimigos.get(e.getName());
+        if (inimigo != null) {
+            inimigo.saldoPrecisao += 15.0; // Triplicado! O radar confia cegamente no que funciona
+        }
+    }
+
+    public void onBulletMissed(BulletMissedEvent e) {
+        if (alvo != null && alvo.vivo) {
+            alvo.saldoPrecisao -= 5.0; // Erros são punidos mais rápido na memória
+        }
+    }
+    
+    public void onBulletHitBullet(BulletHitBulletEvent e) {
+        if (alvo != null && alvo.vivo) {
+            alvo.saldoPrecisao -= 1.0; 
+        }
+    }
+    // -------------------------------------------------------------------------
 
     public void onRobotDeath(RobotDeathEvent event) {
         if (listaInimigos.containsKey(event.getName())) {
@@ -431,7 +503,6 @@ public class BT_7274 extends AdvancedRobot {
     // PROTOCOLO DE SOBREVIVÊNCIA E FUGA
     // =========================================================
     public void verificarFuga() {
-        // Ativa o modo fuga se a energia estiver crítica ou se houver muitos inimigos e a energia estiver moderada
         if (meuRobo.energia < 25 || (getOthers() >= 4 && meuRobo.energia < 45)) {
             modoFuga = true;
         } else {
@@ -449,6 +520,12 @@ public class BT_7274 extends AdvancedRobot {
             
             potencia = Math.min(meuRobo.energia / 4d, Math.min(alvo.energia / 3d, potencia));
             potencia = Utilitario.limitar(potencia, 0.1, 3.0);
+            
+            // --- POSTURA AGRESSIVA MELEE ---
+            if (distancia < 150) {
+                potencia = Math.min(3.0, meuRobo.energia / 12); // Ajuste conservador de energia
+            }
+            // -----------------------------------------------------------
             
             long tempoAteAcerto;
             Point2D.Double mirarEm = new Point2D.Double();
@@ -499,7 +576,7 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     // =========================================================
-    // LÓGICA DE MOVIMENTO MINIMUM RISK (VOTAÇÃO + PERFILAMENTO + FUGA + TIRO)
+    // LÓGICA DE MOVIMENTO MINIMUM RISK (NERF DE COLISÕES)
     // =========================================================
     public void movimento() {
         if (pontoAlvo.distance(meuRobo) < 15 || tempoInativo > 25) {
@@ -551,25 +628,21 @@ public class BT_7274 extends AdvancedRobot {
         }
     }
     
-    /**
-     * SISTEMA DE AVALIAÇÃO DE RISCO (VOTAÇÃO COMPLETA)
-     */
     public double avaliarPonto(Point2D.Double p) {
         double riscoTotal = 0;
         
         // VOTO 1: Estabilidade de movimentação
-        double votoEstabilidade = Utilitario.aleatorioEntre(1, 2.25) / p.distanceSq(meuRobo);
+        double votoEstabilidade = Utilitario.aleatorioEntre(1.15, 2.42) / p.distanceSq(meuRobo);
         riscoTotal += votoEstabilidade;
         
-        // VOTO 2: Controle de Arena (Repulsão do Centro e dos Cantos)
-        double fatorMultidao = (6 * Math.max(0, getOthers() - 1));
+        // VOTO 2: Controle de Arena
+        double fatorMultidao = (6.85 * Math.max(0, getOthers() - 1));
         double votoCentro = fatorMultidao / p.distanceSq(campoBatalha.width / 2, campoBatalha.height / 2);
         
-        double pesoCanto = getOthers() <= 5 ? (getOthers() == 1 ? 0.25 : 0.5) : 1.0;
+        double pesoCanto = getOthers() <= 5 ? (getOthers() == 1 ? 0.32 : 0.58) : 1.15;
         
-        // Se estiver em modo de fuga, perde o medo dos cantos (esconde-se) e ignora o centro
         if (modoFuga) {
-            pesoCanto *= 0.1;
+            pesoCanto *= 0.12;
             votoCentro = 0;
         }
         
@@ -580,7 +653,7 @@ public class BT_7274 extends AdvancedRobot {
                             
         riscoTotal += votoCentro + votoCantos;
         
-        // VOTO 3: Fuga Baseada no Perfilamento (Inimigos Vivos)
+        // VOTO 3: Fuga Baseada no Perfilamento
         boolean existeInimigoVivo = false;
         Iterator<Robo> iteradorInimigos = listaInimigos.values().iterator();
         
@@ -592,8 +665,7 @@ public class BT_7274 extends AdvancedRobot {
             double distanciaSqInimigo = p.distanceSq(inimigo);
             double riscoBase = (1 / Math.max(1, distanciaSqInimigo));
             
-            // Fuga amplia severamente a repulsão de inimigos próximos
-            if (modoFuga) riscoBase *= 3.0; 
+            if (modoFuga) riscoBase *= 3.14; 
             
             riscoBase *= inimigo.fatorAmeaca;
             
@@ -603,13 +675,13 @@ public class BT_7274 extends AdvancedRobot {
             double multiplicadorEvasao = 1.0;
             if (alvo != null && alvo.vivo && inimigo.nome.equals(alvo.nome)) {
                 double anguloRelativo = Utils.normalRelativeAngle(Utilitario.anguloAbsoluto(p, alvo) - Utilitario.anguloAbsoluto(meuRobo, p));
-                multiplicadorEvasao = 1.0 + ((1 - Math.abs(Math.sin(anguloRelativo))) + Math.abs(Math.cos(anguloRelativo))) / 2;
+                multiplicadorEvasao = 1.0 + ((1 - Math.abs(Math.sin(anguloRelativo))) + Math.abs(Math.cos(anguloRelativo))) / 2.0;
             }
             
             riscoTotal += riscoBase * multiplicadorRota * multiplicadorEvasao;
         }
         
-        // VOTO 4: Risco de Trajetória de Tiro (Evasão de Ondas)
+        // VOTO 4: Risco de Trajetória de Tiro
         double votoTiros = 0;
         long tempoAtePonto = (long)(meuRobo.distance(p) / 8.0); 
         long tempoFuturo = getTime() + tempoAtePonto;
@@ -619,7 +691,6 @@ public class BT_7274 extends AdvancedRobot {
             TiroInimigo t = itTiros.next();
             double distTiroPercurso = (tempoFuturo - t.tempoDisparo) * t.velocidade;
             
-            // Remove tiros velhos que já saíram do mapa
             if(distTiroPercurso > 1500) { 
                 itTiros.remove(); 
                 continue; 
@@ -627,17 +698,62 @@ public class BT_7274 extends AdvancedRobot {
             
             Point2D.Double posTiroPrevista = (Point2D.Double) Utilitario.projetar(t.origem, t.angulo, distTiroPercurso);
             
-            // Se o ponto cruzar a provável bala no tempo calculado, adiciona risco imenso
-            if(posTiroPrevista.distanceSq(p) < 2500) { // Raio de segurança ~50 pixels
-                votoTiros += 1000 / Math.max(1, posTiroPrevista.distanceSq(p));
+            if(posTiroPrevista.distanceSq(p) < 2500) { 
+                votoTiros += 1050.5 / Math.max(1, posTiroPrevista.distanceSq(p));
             }
         }
         riscoTotal += votoTiros;
         
-        // VOTO 5: Penalidade Curva Brusca (Apenas se não houver inimigos ativos e precisar se mover)
+        // VOTO 5: Penalidade Curva Brusca
         if (!existeInimigoVivo) {
-            riscoTotal += (1 + Math.abs(Utilitario.anguloAbsoluto(meuRobo, pontoAlvo) - getHeadingRadians()));
+            riscoTotal += (1.1 + Math.abs(Utilitario.anguloAbsoluto(meuRobo, pontoAlvo) - getHeadingRadians()));
         }
+
+        // --- VOTO 6: MODO CAÇADOR (NERFADO PARA EVITAR COLISÕES) ---
+        if (alvo != null && alvo.vivo && alvo.energia < 15 && meuRobo.energia > (alvo.energia * 2.5) && getOthers() <= 3) {
+            riscoTotal -= (125.0 / Math.max(1, p.distance(alvo))); // Reduzido de 1085.2
+        }
+        // ------------------------------------------------
+        
+        // --- VOTO 7: TÁTICA ANTI-SURF OTIMIZADA ---
+        if (alvo != null && alvo.vivo && alvo.classificadoComoSurfer && existeInimigoVivo) {
+            double distanciaParaSurfer = p.distance(alvo);
+            if (distanciaParaSurfer > 200) {
+                riscoTotal -= (850.0 * alvo.fatorSurf) / Math.max(1, distanciaParaSurfer); // Reduzido de 1618.3
+            } else {
+                riscoTotal += (150.0 / Math.max(1, distanciaParaSurfer)); // Reduzido de 521.4
+            }
+        }
+        // --------------------------------
+        
+        // =========================================================================
+        // NERF TÁTICO: SHADOWING & CAOS AGORA SÃO APENAS MICRO-AJUSTES
+        // =========================================================================
+        
+        // --- VOTO 8: IMITAÇÃO DE MOVIMENTO (SHADOWING) ---
+        if (alvo != null && alvo.vivo) {
+            double direcaoRealInimigo = alvo.velocidade < 0 ? alvo.direcao + Math.PI : alvo.direcao;
+            double anguloNossoPonto = Utilitario.anguloAbsoluto(meuRobo, p);
+            double diferencaAngulo = Math.abs(Utils.normalRelativeAngle(direcaoRealInimigo - anguloNossoPonto));
+            
+            // Peso de imitação reduzido drasticamente para -18.5 (antes -342.75). Evita que ele vá para cima do tiro.
+            double votoImitacao = -18.5 * (1.0 - (diferencaAngulo / Math.PI)) * (Math.abs(alvo.velocidade) / 8.0);
+            riscoTotal += votoImitacao;
+        }
+        
+        // --- MELHORIA DE SURFING: QUEBRA DE PADRÃO E INÉRCIA ---
+        double anguloParaPonto = Utilitario.anguloAbsoluto(meuRobo, p);
+        double diferencaInercia = Math.abs(Utils.normalRelativeAngle(anguloParaPonto - getHeadingRadians()));
+        
+        // Onda caótica bem mais longa, não vai ficar parando a toda hora
+        double fatorCaos = Math.sin(getTime() / 85.5); // Aumentado o divisor de 11.83 para 85.5
+        
+        if (fatorCaos > 0.8 && diferencaInercia < 0.3) {
+            riscoTotal += 35.0; // Penalidade quase simbólica (antes 1642.5)
+        } else if (fatorCaos < -0.8 && diferencaInercia > Math.PI / 2) {
+            riscoTotal += 35.0; 
+        }
+        // =========================================================================
         
         return riscoTotal;
     }
