@@ -10,11 +10,11 @@ import robocode.*;
 import robocode.util.Utils;
 
 /**
- * BT-7274 (Versão Elite 6.1 - BOOST DE SURFING EM MELEE)
+ * BT-7274 (Versão Elite 6.3 - MODO PREDADOR: AGRESSIVIDADE NO 1V1 CONTRA PADRÕES)
  * Estratégia Híbrida MIRA EXTREMA + Smart Fallback + Wave Surfing
  * * MOTOR SHADOW INTEGRADO + PASSIVE BULLET SHADOW.
  * * DYNAMIC DOWNSCALING, KNN PESADO & GUNWAVE.
- * * NOVO: Boost de peso (2.5x) para o Wave Surfing durante partidas Melee.
+ * * NOVO: Aumenta a agressividade e o peso do MRM no 1v1 contra alvos básicos/intermediários.
  */
 public class BT_7274 extends AdvancedRobot {
     
@@ -122,7 +122,8 @@ public class BT_7274 extends AdvancedRobot {
             double hitRateAtual = totalTirosDisparados > 0 ? ((double)totalTirosAcertados / totalTirosDisparados) * 100.0 : 100.0;
             boolean forcarPorDerrotasHUD = (alvo != null && alvo.nome != null && derrotasSeguidas.getOrDefault(alvo.nome, 0) > 5);
             
-            if (forcarPorDerrotasHUD && !escolheuArmaNaturalmente) sufixo = " (Lock Vingança: Alternando)";
+            if (getOthers() <= 1 && !escolheuArmaNaturalmente && ultimaVGEscolhida == 8) sufixo = " (Lock: Surfing 1v1 Ativo)";
+            else if (forcarPorDerrotasHUD && !escolheuArmaNaturalmente) sufixo = " (Lock Vingança: Alternando)";
             else if (totalTirosDisparados >= 15 && hitRateAtual < 10.0 && !escolheuArmaNaturalmente) sufixo = " (Lock: Precisão < 10% - Alternando)";
             else if (alvo != null && alvo.classificadoComoSurfer && !escolheuArmaNaturalmente) {
                 if (alvo.agressividade > 2.0) sufixo = " (Anti-Surfer Agr - Alternando)";
@@ -148,7 +149,10 @@ public class BT_7274 extends AdvancedRobot {
         String txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: %.2f | MRM: %.2f", confiancaSurfing, confiancaMRM);
         if (getOthers() <= 1 && alvo != null && alvo.classificadoComoSurfer) {
             txtPesos = "Confiança Motor -> Surf: 1.00 | MRM: 0.00 (OVERRIDE ANTI-SURFER)";
-        } else if (getOthers() > 1) { // --- NOVO: HUD AVISANDO DO BOOST MELEE ---
+        } else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
+            // --- NOVO: HUD AVISANDO DO BOOST DE AGRESSIVIDADE NO 1V1 ---
+            txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: %.2f | MRM: %.2f (BOOST AGRESSIVO)", confiancaSurfing, (confiancaMRM * 2.5));
+        } else if (getOthers() > 1) { 
             txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: %.2f (BOOST MELEE) | MRM: %.2f", (confiancaSurfing * 2.5), confiancaMRM);
         }
         g.drawString(txtPesos, 10, 115);
@@ -823,7 +827,12 @@ public class BT_7274 extends AdvancedRobot {
             boolean forcarPorPrecisao = (bot.totalTirosDisparados >= 15 && precisaoGlobalOnda < 10.0);
             boolean forcarPorDerrotas = (bot.alvo != null && bot.alvo.nome != null && BT_7274.derrotasSeguidas.getOrDefault(bot.alvo.nome, 0) > 5);
             
-            if (forcarPorDerrotas) {
+            boolean surfing1v1DedicadoAtivo = (bot.getOthers() <= 1);
+            
+            if (surfing1v1DedicadoAtivo) {
+                melhorVG = 8; 
+                bot.escolheuArmaNaturalmente = false;
+            } else if (forcarPorDerrotas) {
                 melhorVG = armaAlternada; 
                 bot.escolheuArmaNaturalmente = false;
             } else if (bot.alvo != null && bot.alvo.classificadoComoSurfer && (melhorVG == -1 || melhorVG < 3)) {
@@ -1225,7 +1234,9 @@ public class BT_7274 extends AdvancedRobot {
                         double precisaoGlobalLog = totalTirosDisparados > 0 ? ((double)totalTirosAcertados / totalTirosDisparados) * 100.0 : 100.0;
                         boolean forcarPorDerrotasLog = (alvo != null && alvo.nome != null && derrotasSeguidas.getOrDefault(alvo.nome, 0) > 5);
                         
-                        if (forcarPorDerrotasLog && !escolheuArmaNaturalmente) {
+                        if (getOthers() <= 1 && !escolheuArmaNaturalmente && ultimaVGEscolhida == 8) {
+                            txtAdicional = " (Forçada - Surfing 1v1 Dedicado Ativo!)";
+                        } else if (forcarPorDerrotasLog && !escolheuArmaNaturalmente) {
                             txtAdicional = " (Forçada - >5 Derrotas Seguidas! Alternando)";
                         } else if (!escolheuArmaNaturalmente && ultimaVGEscolhida >= 7) {
                             txtAdicional = " (Forçada por Inatividade ou Lock do Inimigo - Alternando)";
@@ -1308,7 +1319,8 @@ public class BT_7274 extends AdvancedRobot {
             String sufixo = "";
             boolean forcarPorDerrotasMetrica = (alvo != null && alvo.nome != null && derrotasSeguidas.getOrDefault(alvo.nome, 0) > 5);
             
-            if (forcarPorDerrotasMetrica && !escolheuArmaNaturalmente) sufixo = " (Lock Vingança: Alternando)";
+            if (getOthers() <= 1 && !escolheuArmaNaturalmente && ultimaVGEscolhida == 8) sufixo = " (Lock: Surfing 1v1 Dedicado)";
+            else if (forcarPorDerrotasMetrica && !escolheuArmaNaturalmente) sufixo = " (Lock Vingança: Alternando)";
             else if (!escolheuArmaNaturalmente && ultimaVGEscolhida >= 7) sufixo = " (Forçada por Inatividade / Surfer - Alternando)";
             else if (totalTirosDisparados >= 15 && hitRate < 10.0 && !escolheuArmaNaturalmente) sufixo = " (Lock Precaução: Precisão < 10% - Alternando)";
             
@@ -1363,13 +1375,17 @@ public class BT_7274 extends AdvancedRobot {
         if (getOthers() <= 1 && alvo != null && alvo.classificadoComoSurfer) {
             pesoS_Final = 1.0;
             pesoM_Final = 0.0;
-        } else if (getOthers() > 1) { // --- NOVO: CONSOLE AVISANDO DO BOOST MELEE ---
+        } else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
+            pesoM_Final *= 2.5; 
+        } else if (getOthers() > 1) { 
             pesoS_Final *= 2.5;
         }
         
         System.out.println(String.format(Locale.US, " Confiança Final  -> Surfing: %.2f | MRM: %.2f", pesoS_Final, pesoM_Final));
         if (getOthers() <= 1 && alvo != null && alvo.classificadoComoSurfer) {
              System.out.println(" Override 1v1     : MRM Desativado (Foco TOTAL no Wave Surfing)");
+        } else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
+             System.out.println(" Override 1v1     : Modo AGRESSIVO (Foco no MRM de perseguição)");
         } else if (getOthers() > 1) {
              System.out.println(" Override Melee   : Peso do Surfing Aumentado (+150% Sobrevivência)");
         }
@@ -1764,6 +1780,14 @@ public class BT_7274 extends AdvancedRobot {
             if (!modoFuga && alvo != null && alvo.vivo && inimigo.nome.equals(alvo.nome)) {
                 double baseDist = (numOthers > 1) ? 100.0 : 250.0; 
                 double maxDist = (numOthers > 1) ? 400.0 : 700.0;
+                
+                // --- NOVO: MODO AGRESSIVO (BT-7274) CONTRA BÁSICOS/INTERMEDIÁRIOS NO 1V1 ---
+                if (numOthers <= 1 && !alvo.classificadoComoSurfer) {
+                    baseDist = 100.0; // Encurta a distância base para colar no inimigo
+                    maxDist = 350.0;  // Não deixa o robô se afastar muito
+                }
+                // ---------------------------------------------------------------------------
+                
                 double distanciaIdeal = Utilitario.limitar(baseDist + (inimigo.agressividade * 25.0), 100.0, maxDist);
                 
                 double erroDistancia = Math.abs(distReal - distanciaIdeal);
@@ -1774,6 +1798,13 @@ public class BT_7274 extends AdvancedRobot {
                 }
                 
                 boolean isAmeacaAvancada = (inimigo.agressividade > 0.5 || inimigo.saldoPrecisao > 10.0 || inimigo.classificadoComoSurfer);
+                
+                // --- NOVO: ATRAÇÃO DIRETA (AGRESSIVIDADE) SE FOR BÁSICO/INTERMEDIÁRIO EM 1V1 ---
+                if (numOthers <= 1 && !alvo.classificadoComoSurfer && distReal > 100) {
+                    riscoMRM -= 45000.0 / Math.max(1, distReal); // Atração forte em direção ao alvo
+                }
+                // -------------------------------------------------------------------------------
+                
                 double raioCaca = (numOthers > 1) ? 800 : 450; 
                 
                 if (isAmeacaAvancada && meuRobo.distance(inimigo) <= raioCaca) {
@@ -1894,10 +1925,10 @@ public class BT_7274 extends AdvancedRobot {
         if (numOthers <= 1 && alvo != null && alvo.classificadoComoSurfer) {
             pesoS = 1.0; 
             pesoM = 0.0; 
-        } else if (numOthers > 1) {
-            // --- NOVO: PESO EXTRA PARA O WAVE SURFING NO MELEE ---
-            // Como os riscos do MRM são muito altos em Melee, fortalecemos o Wave Surfing
-            // para que ele não seja totalmente esmagado pela navegação de campo.
+        } else if (numOthers <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
+            // --- NOVO: AUMENTA DRASTICAMENTE O PESO DO MRM PARA CAÇAR BOTS BÁSICOS/INTERMEDIÁRIOS ---
+            pesoM *= 2.5; 
+        } else if (numOthers > 1) { 
             pesoS *= 2.5; 
         }
         
