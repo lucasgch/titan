@@ -10,11 +10,11 @@ import robocode.*;
 import robocode.util.Utils;
 
 /**
- * BT-7274 (Versão Elite 6.3 - MODO PREDADOR: AGRESSIVIDADE NO 1V1 CONTRA PADRÕES)
+ * BT-7274 (Versão Elite 6.4 - PATH SIMULATOR VISUAL & MODO PREDADOR)
  * Estratégia Híbrida MIRA EXTREMA + Smart Fallback + Wave Surfing
  * * MOTOR SHADOW INTEGRADO + PASSIVE BULLET SHADOW.
  * * DYNAMIC DOWNSCALING, KNN PESADO & GUNWAVE.
- * * NOVO: Aumenta a agressividade e o peso do MRM no 1v1 contra alvos básicos/intermediários.
+ * * NOVO: Printa no onPaint a linha exata do Path Simulation calculado.
  */
 public class BT_7274 extends AdvancedRobot {
     
@@ -59,6 +59,9 @@ public class BT_7274 extends AdvancedRobot {
     
     // --- MEMÓRIA DE DERROTAS SEGUIDAS PARA O SISTEMA NÊMESIS ---
     private static HashMap<String, Integer> derrotasSeguidas = new HashMap<>();
+    
+    // --- NOVO: MEMÓRIA VISUAL DO PATH SIMULATION DO SURFING ---
+    private List<Point2D.Double> caminhoSurfingVisualizado = new ArrayList<>();
     
     // Object Pool para Zero-Allocation no Garbage Collector
     List<Point2D.Double> posicoesPossiveis = new ArrayList<>(450);
@@ -145,12 +148,10 @@ public class BT_7274 extends AdvancedRobot {
         g.drawString("== TELEMETRIA MOVIMENTO ==", 10, 85);
         g.drawString("Modo Atual: " + (modoFuga ? "FUGA (Crítico)" : "COMBATE (Ataque/Evasão)"), 10, 100);
         
-        // Exibição condicional de pesos em caso de Override
         String txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: %.2f | MRM: %.2f", confiancaSurfing, confiancaMRM);
         if (getOthers() <= 1 && alvo != null && alvo.classificadoComoSurfer) {
             txtPesos = "Confiança Motor -> Surf: 1.00 | MRM: 0.00 (OVERRIDE ANTI-SURFER)";
         } else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
-            // --- NOVO: HUD AVISANDO DO BOOST DE AGRESSIVIDADE NO 1V1 ---
             txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: %.2f | MRM: %.2f (BOOST AGRESSIVO)", confiancaSurfing, (confiancaMRM * 2.5));
         } else if (getOthers() > 1) { 
             txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: %.2f (BOOST MELEE) | MRM: %.2f", (confiancaSurfing * 2.5), confiancaMRM);
@@ -172,7 +173,22 @@ public class BT_7274 extends AdvancedRobot {
             yHUD += 15;
         }
 
-        // Desenhar o ponto de destino no mapa para acompanhamento visual em tempo real
+        // --- NOVO: DESENHO DO PATH SIMULATION DO WAVE SURFING ---
+        if (caminhoSurfingVisualizado != null && !caminhoSurfingVisualizado.isEmpty()) {
+            g.setColor(new Color(255, 50, 50, 180)); // Vermelho translúcido para o Path do Surf
+            for (int i = 0; i < caminhoSurfingVisualizado.size(); i++) {
+                Point2D.Double pt = caminhoSurfingVisualizado.get(i);
+                g.fillOval((int)pt.x - 2, (int)pt.y - 2, 4, 4);
+                if (i > 0) {
+                    Point2D.Double ptAnt = caminhoSurfingVisualizado.get(i - 1);
+                    g.drawLine((int)ptAnt.x, (int)ptAnt.y, (int)pt.x, (int)pt.y);
+                }
+            }
+            Point2D.Double ultimoPt = caminhoSurfingVisualizado.get(caminhoSurfingVisualizado.size() - 1);
+            g.drawString("Path Surf", (int)ultimoPt.x + 10, (int)ultimoPt.y);
+        }
+
+        // Desenhar o ponto de destino no mapa para acompanhamento visual do MRM
         if (pontoAlvo != null && pontoAlvo.x > 0 && pontoAlvo.y > 0) {
             g.setColor(new Color(0, 255, 255, 150)); // Ciano translúcido
             g.drawOval((int)pontoAlvo.x - 15, (int)pontoAlvo.y - 15, 30, 30);
@@ -278,11 +294,9 @@ public class BT_7274 extends AdvancedRobot {
                 int bin = obterBin(posX, posY);
                 estatisticasSurfing[bin]++; 
                 
-                // --- SALVA NO BUFFER SEPARADO SE ESTIVER EM 1V1 ---
                 if (getOthers() <= 1) {
                     estatisticasSurfing1v1[bin]++;
                 }
-                // ---------------------------------------------------------
                 return true;
             }
             return false;
@@ -325,6 +339,20 @@ public class BT_7274 extends AdvancedRobot {
             }
         }
 
+        // --- NOVO: SIMULA E GERA O CAMINHO VISUAL DO SURFING NO PAINT ---
+        if (ondaMaisProxima != null) {
+            double riscoFrente = preverRiscoMovimento(ondaMaisProxima, 1);
+            double riscoTras = preverRiscoMovimento(ondaMaisProxima, -1);
+            double riscoParado = preverRiscoMovimento(ondaMaisProxima, 0);
+
+            int direcaoSeguraVis = 1;
+            if (riscoTras < riscoFrente && riscoTras <= riscoParado) direcaoSeguraVis = -1;
+            else if (riscoParado < riscoFrente && riscoParado < riscoTras) direcaoSeguraVis = 0;
+            
+            atualizarCaminhoVisual(ondaMaisProxima, direcaoSeguraVis);
+        }
+        // -----------------------------------------------------------------
+
         boolean conflitoMotores = false; 
         if (conflitoMotores && ondaMaisProxima != null) {
             double riscoFrente = preverRiscoMovimento(ondaMaisProxima, 1);
@@ -364,6 +392,37 @@ public class BT_7274 extends AdvancedRobot {
         }
     }
 
+    private void atualizarCaminhoVisual(OndaInimiga ondaPrimaria, int direcaoAcao) {
+        caminhoSurfingVisualizado.clear();
+        double posPrevistaX = meuRobo.x;
+        double posPrevistaY = meuRobo.y;
+        double velocidadeSimulada = getVelocity();
+        double direcaoSimulada = getHeadingRadians();
+        
+        long tempoVoo = (long) ((ondaPrimaria.origem.distance(meuRobo) - ((getTime() - ondaPrimaria.tempoDisparo) * ondaPrimaria.velocidadeBala)) / ondaPrimaria.velocidadeBala);
+
+        for (int i = 0; i < Math.max(1, tempoVoo); i++) {
+            double velDesejada = direcaoAcao * 8.0;
+            if (velocidadeSimulada < velDesejada) {
+                velocidadeSimulada += (velocidadeSimulada < 0) ? 2.0 : 1.0;
+                if (velocidadeSimulada > velDesejada) velocidadeSimulada = velDesejada;
+            } else if (velocidadeSimulada > velDesejada) {
+                velocidadeSimulada -= (velocidadeSimulada > 0) ? 2.0 : 1.0;
+                if (velocidadeSimulada < velDesejada) velocidadeSimulada = velDesejada;
+            }
+            
+            direcaoSimulada = Math.atan2(posPrevistaX - ondaPrimaria.origem.x, posPrevistaY - ondaPrimaria.origem.y) + (Math.PI/2) * (direcaoAcao == 0 ? 1 : direcaoAcao);
+            
+            posPrevistaX += Math.sin(direcaoSimulada) * velocidadeSimulada;
+            posPrevistaY += Math.cos(direcaoSimulada) * velocidadeSimulada;
+
+            posPrevistaX = Utilitario.limitar(posPrevistaX, MARGEM_PAREDE, campoBatalha.width - MARGEM_PAREDE);
+            posPrevistaY = Utilitario.limitar(posPrevistaY, MARGEM_PAREDE, campoBatalha.height - MARGEM_PAREDE);
+            
+            caminhoSurfingVisualizado.add(new Point2D.Double(posPrevistaX, posPrevistaY));
+        }
+    }
+
     private double preverRiscoMovimento(OndaInimiga ondaPrimaria, int direcaoAcao) {
         double posPrevistaX = meuRobo.x;
         double posPrevistaY = meuRobo.y;
@@ -379,7 +438,6 @@ public class BT_7274 extends AdvancedRobot {
         for (int i = 0; i < Math.max(1, tempoVoo); i++) {
             tempoSimulado++;
             
-            // --- INERTIA CONTROL (Física do Robocode) ---
             double velDesejada = direcaoAcao * 8.0;
             if (velocidadeSimulada < velDesejada) {
                 velocidadeSimulada += (velocidadeSimulada < 0) ? 2.0 : 1.0;
@@ -388,7 +446,6 @@ public class BT_7274 extends AdvancedRobot {
                 velocidadeSimulada -= (velocidadeSimulada > 0) ? 2.0 : 1.0;
                 if (velocidadeSimulada < velDesejada) velocidadeSimulada = velDesejada;
             }
-            // --------------------------------------------------
             
             direcaoSimulada = Math.atan2(posPrevistaX - ondaPrimaria.origem.x, posPrevistaY - ondaPrimaria.origem.y) + (Math.PI/2) * (direcaoAcao == 0 ? 1 : direcaoAcao);
             
@@ -398,7 +455,6 @@ public class BT_7274 extends AdvancedRobot {
             posPrevistaX = Utilitario.limitar(posPrevistaX, MARGEM_PAREDE, campoBatalha.width - MARGEM_PAREDE);
             posPrevistaY = Utilitario.limitar(posPrevistaY, MARGEM_PAREDE, campoBatalha.height - MARGEM_PAREDE);
 
-            // --- AVALIAÇÃO DE MÚLTIPLAS ONDAS DURANTE A SIMULAÇÃO DO CAMINHO ---
             for (OndaInimiga onda : ondasInimigas) {
                 if (onda == ondaPrimaria) continue; 
                 
@@ -413,7 +469,6 @@ public class BT_7274 extends AdvancedRobot {
                     }
                 }
             }
-            // -------------------------------------------------------------------------
         }
 
         int binPrimario = ondaPrimaria.obterBin(posPrevistaX, posPrevistaY);
@@ -1781,12 +1836,10 @@ public class BT_7274 extends AdvancedRobot {
                 double baseDist = (numOthers > 1) ? 100.0 : 250.0; 
                 double maxDist = (numOthers > 1) ? 400.0 : 700.0;
                 
-                // --- NOVO: MODO AGRESSIVO (BT-7274) CONTRA BÁSICOS/INTERMEDIÁRIOS NO 1V1 ---
                 if (numOthers <= 1 && !alvo.classificadoComoSurfer) {
-                    baseDist = 100.0; // Encurta a distância base para colar no inimigo
-                    maxDist = 350.0;  // Não deixa o robô se afastar muito
+                    baseDist = 100.0; 
+                    maxDist = 350.0;  
                 }
-                // ---------------------------------------------------------------------------
                 
                 double distanciaIdeal = Utilitario.limitar(baseDist + (inimigo.agressividade * 25.0), 100.0, maxDist);
                 
@@ -1799,11 +1852,9 @@ public class BT_7274 extends AdvancedRobot {
                 
                 boolean isAmeacaAvancada = (inimigo.agressividade > 0.5 || inimigo.saldoPrecisao > 10.0 || inimigo.classificadoComoSurfer);
                 
-                // --- NOVO: ATRAÇÃO DIRETA (AGRESSIVIDADE) SE FOR BÁSICO/INTERMEDIÁRIO EM 1V1 ---
                 if (numOthers <= 1 && !alvo.classificadoComoSurfer && distReal > 100) {
-                    riscoMRM -= 45000.0 / Math.max(1, distReal); // Atração forte em direção ao alvo
+                    riscoMRM -= 45000.0 / Math.max(1, distReal); 
                 }
-                // -------------------------------------------------------------------------------
                 
                 double raioCaca = (numOthers > 1) ? 800 : 450; 
                 
@@ -1926,7 +1977,6 @@ public class BT_7274 extends AdvancedRobot {
             pesoS = 1.0; 
             pesoM = 0.0; 
         } else if (numOthers <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
-            // --- NOVO: AUMENTA DRASTICAMENTE O PESO DO MRM PARA CAÇAR BOTS BÁSICOS/INTERMEDIÁRIOS ---
             pesoM *= 2.5; 
         } else if (numOthers > 1) { 
             pesoS *= 2.5; 
