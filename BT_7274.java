@@ -139,10 +139,7 @@ public class BT_7274 extends AdvancedRobot {
             else if (totalTirosDisparados >= 15 && hitRateAtual < 10.0 && !escolheuArmaNaturalmente)
                 sufixo = " (Lock: Precisão < 10% - Alternando)";
             else if (alvo != null && alvo.classificadoComoSurfer && !escolheuArmaNaturalmente) {
-                if (alvo.agressividade > 2.0)
-                    sufixo = " (Anti-Surfer Agr - Alternando)";
-                else
-                    sufixo = " (Anti-Surfer Padrão - Alternando)";
+                sufixo = (alvo.agressividade > 2.0) ? " (Anti-Surfer Agr - Alternando)" : " (Anti-Surfer Padrão - Alternando)";
             }
 
             g.drawString("Arma Ativa: " + NOMES_VG[ultimaVGEscolhida] + sufixo, 10, 30);
