@@ -803,14 +803,14 @@ public class BT_7274 extends AdvancedRobot {
             c0_d += Math.pow(inimigo.historicoDeltaDirecao.get(n - 1) - mu_d, 2);
 
             double phi_v = (c0_v == 0) ? 0 : Utilitario.limitar(c1_v / c0_v, -0.99, 0.99);
-            double phi_d = (c0_d == 0) ? 0 : Utilitario.limitar(c1_d / c0_d, -0.99, 0.99);
+            double phi_d = phi_v;
 
             double erro_v = inimigo.historicoVelocidade.get(0)
                     - (mu_v + phi_v * (inimigo.historicoVelocidade.get(1) - mu_v));
             double erro_d = inimigo.historicoDeltaDirecao.get(0)
                     - (mu_d + phi_d * (inimigo.historicoDeltaDirecao.get(1) - mu_d));
             double theta_v = 0.5;
-            double theta_d = 0.5;
+            double theta_d = theta_v;
 
             double simArmaX = iniX, simArmaY = iniY;
             double simArmaDir = inimigo.direcao;
@@ -2143,7 +2143,6 @@ public class BT_7274 extends AdvancedRobot {
             pesoM = 0.0;
         } else if (numOthers <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
             // --- ATUALIZADO: DESATIVA O SURFING COMPLETAMENTE SE FOR BÁSICO/INTERMEDIÁRIO
-            // ---
             pesoS = 0.0;
             pesoM *= 2.5;
         } else if (numOthers > 1) {
