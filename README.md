@@ -4,6 +4,12 @@ Robôs desenvolvidos como parte da disciplina de Introdução à Computação do
 
 Orientação: [Diego Medeiros](https://github.com/diegomedeiros-IFSC)
 
+Equipe:
+- [Felipe Rezende](https://github.com/feliperezn)
+- [Gustavo Niehues](https://github.com/GustavoNiehues)
+- [Lucas de Godoy Chicarelli](https://github.com/lucasgch)
+- [Mauricio Telles Silva](https://github.com/MauricioTellesSilva)
+
 ## Como baixar e instalar o robocode
 
 Acesse o repositório oficial e faça o download da útima versão: [https://robocode.sourceforge.io/](https://robocode.sourceforge.io/)
