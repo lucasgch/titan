@@ -2,9 +2,9 @@
 
 Robôs desenvolvidos como parte da disciplina de Introdução à Computação do 1º Período de Análise e Desenvolvimento de Sistemas do IFSC - Campus São José.
 
-Orientação: [Diego Medeiros](https://github.com/diegomedeiros-IFSC)
+**Orientação**: [Diego Medeiros](https://github.com/diegomedeiros-IFSC)
 
-Equipe:
+**Equipe**:
 - [Felipe Rezende](https://github.com/feliperezn)
 - [Gustavo Niehues](https://github.com/GustavoNiehues)
 - [Lucas de Godoy Chicarelli](https://github.com/lucasgch)
