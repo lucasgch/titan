@@ -10,11 +10,12 @@ import robocode.*;
 import robocode.util.Utils;
 
 /**
- * BT-7274 (Versão Elite 6.6 - TOTALMENTE COMENTADA E DOCUMENTADA)
+ * BT-7274 (Versão Elite 6.7 - PROTOCOLO 3: TRIBUTO TITANFALL)
  * Estratégia Híbrida MIRA EXTREMA + Smart Fallback + Wave Surfing
  * * MOTOR SHADOW INTEGRADO + PASSIVE BULLET SHADOW.
  * * DYNAMIC DOWNSCALING, KNN PESADO & GUNWAVE.
  * * FIX: O MRM na força máxima e o desligamento do Surfing exigem que o alvo seja BÁSICO.
+ * * NOVO: Falas finais do BT-7274 adicionadas ao evento de vitória.
  */
 public class BT_7274 extends AdvancedRobot {
     
@@ -1666,6 +1667,14 @@ public class BT_7274 extends AdvancedRobot {
             derrotasSeguidas.put(alvo.nome, 0); // Vingança concluída, reseta o Nêmesis
         }
         exibirMetricas();
+        
+        // --- NOVO: FALAS FINAIS DO BT-7274 (TITANFALL 2) ---
+        System.out.println("=================================================");
+        System.out.println("[BT-7274] Protocolo 3: Proteger o Piloto.");
+        System.out.println("[BT-7274] Confie em mim.");
+        System.out.println("=================================================");
+        // ---------------------------------------------------
+        
         while (true) {
             coresBT7274(); // Dança da vitória do BT
             turnRadarRight(360);
