@@ -10,31 +10,36 @@ import robocode.*;
 import robocode.util.Utils;
 
 /**
- * BT-7274 (Versão Elite - BASE ORIGINAL + NOVO PAINT + SHADOW ATIVO + ANTI-CLINGER)
+ * BT-7274 (Versão Elite - BASE ORIGINAL + NOVO PAINT + SHADOW ATIVO + ANTI-CLINGER + ALTA DENSIDADE COMPUTACIONAL)
  * Estratégia Híbrida MIRA EXTREMA + Smart Fallback + Wave Surfing
  * * BASE REVERTIDA: Estrutura não-refatorada clássica mantida.
- * * OVERRIDE DE MIRA: Se o alvo não for Surfer, usa Arma Auxiliar Analítica (0).
- * * OVERRIDE DE SURFER: Se for Surfer, trava na GunWave GF Clássica (8) e salva.
- * * OVERRIDE MRM AGRESSIVO: Em 1v1 contra não-surfers, desativa Surfing e usa MRM agressivo x3.
+ * * OVERRIDE DE SURFER: Alterna dinamicamente entre KNN Pesado (7), Anti-Trem (5) e GunWave GF (8), escolhendo a de maior precisão.
+ * * OVERRIDE MRM AGRESSIVO: Em 1v1 contra não-surfers, desativa Surfing e usa MRM orbital agressivo a 300px.
  * * MEMÓRIA PERSISTENTE ESTÁTICA: Salva e restaura o perfil de cada inimigo entre rounds.
  * * NOVO PAINT: Renderização visual de Shadow Waves gigantes, overlays e laser preditivo.
  * * NOVO SHADOW ATIVO: Esconde-se atrás dos próprios tiros projetando intersecções no ar.
  * * NOVO MULTI-WAVE PESADO: Se > 3 inimigos vivos, usa Multi-Wave Surfing e atração forte de sombras (x3).
  * * NOVO LOG DE ARMAS: Exibe no console a arma específica definida e travada para cada inimigo.
- * * NOVO MODO CLINGER: Detecta robôs que nos seguem/grudam, corrigindo falso-positivo de Surfer e ativando evasão severa.
+ * * UPGRADE DE CÁLCULO: BINS elevados para 101 e Pontos Previstos para 800, maximizando o poder de simulação da Gun Wave.
+ * * DISTÂNCIA PREDADORA E FIX DE PAREDE: Repulsão matemática das paredes (Wall Hump Fix).
+ * * INTEGRAÇÃO V2 (APENAS 1V1): Substituição do motor de Mira (ARMA) e Movimento (ARIMA+Dynamic) para Clingers e Básicos baseado no arquivo novo.
+ * * FIX COMPILAÇÃO: Resolvido sombreamento da classe Double para java.lang.Double na lista de histórico de tiros.
  */
 public class BT_7274 extends AdvancedRobot {
     
     // =========================================================
     // CONSTANTES GLOBAIS OTIMIZADAS E VARIÁVEIS DE ESTADO
     // =========================================================
-    private final int QUANTIDADE_PONTOS_PREVISTOS = 150;
+    private final int QUANTIDADE_PONTOS_PREVISTOS = 800; 
     private final double MARGEM_PAREDE = 22.5; 
     private Random aleatorio = new Random();
 
     private double potenciaTiroCorrente = 3; 
     private double direcaoLateral = 1;       
     private double velocidadeInimigoAnterior = 0; 
+    
+    // Variável nova para a integração de movimento do arquivo upado
+    private int moveDirection1v1 = 1;
     
     HashMap<String, Robo> listaInimigos = new HashMap<>();
     List<TiroInimigo> tirosSuspeitos = new ArrayList<>();
@@ -103,7 +108,7 @@ public class BT_7274 extends AdvancedRobot {
 
     private static final int INDICES_DISTANCIA = 6;
     private static final int INDICES_VELOCIDADE = 6;
-    private static final int BINS = 47; 
+    private static final int BINS = 101; 
     private static final int BIN_CENTRAL = (BINS - 1) / 2; 
     private static final double ANGULO_ESCAPE_MAXIMO = 0.7; 
     private static final double LARGURA_BIN = ANGULO_ESCAPE_MAXIMO / (double) BIN_CENTRAL; 
@@ -134,9 +139,9 @@ public class BT_7274 extends AdvancedRobot {
             
             if (forcarPorDerrotasHUD && !escolheuArmaNaturalmente) sufixo = " (Lock Vingança: Alternando)";
             else if (totalTirosDisparados >= 15 && hitRateAtual < 10.0 && !escolheuArmaNaturalmente) sufixo = " (Lock: Precisão < 10% - Alternando)";
-            else if (alvo != null && alvo.ehClinger) sufixo = " (Lock: Auxiliar Anti-Clinger)";
-            else if (alvo != null && !alvo.classificadoComoSurfer && getOthers() <= 1) sufixo = " (Lock: Auxiliar Anti-NonSurfer)";
-            else if (alvo != null && alvo.classificadoComoSurfer) sufixo = " (Lock: GunWave GF vs Surfer)";
+            else if (alvo != null && alvo.ehClinger) sufixo = " (Lock: ARMA Analítica Anti-Clinger - Orbita 200px)";
+            else if (alvo != null && !alvo.classificadoComoSurfer && getOthers() <= 1) sufixo = " (Lock: ARMA Preditiva Anti-NonSurfer)";
+            else if (alvo != null && alvo.classificadoComoSurfer) sufixo = " (Lock: Anti-Surfer Adaptativo)";
             
             g.drawString("Arma Ativa: " + NOMES_VG[ultimaVGEscolhida] + sufixo, 10, 30);
         }
@@ -154,11 +159,11 @@ public class BT_7274 extends AdvancedRobot {
         
         String txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: %.2f | MRM: %.2f", confiancaSurfing, confiancaMRM);
         if (alvo != null && alvo.ehClinger) {
-            txtPesos = "Confiança Motor -> Surf: 0.00 (OFF) | MRM: 100.00 (ANTI-CLINGER)";
+            txtPesos = "Confiança Motor -> Surf: 0.00 (OFF) | MRM/ARIMA: 100.00 (ANTI-CLINGER)";
         } else if (getOthers() <= 1 && alvo != null && alvo.classificadoComoSurfer) {
             txtPesos = "Confiança Motor -> Surf: 1.00 | MRM: 0.00 (OVERRIDE ANTI-SURFER)"; 
         } else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
-            txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: 0.00 (OFF) | MRM: %.2f (BOOST PREDADOR)", (confiancaMRM * 3.0)); 
+            txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: 0.00 (OFF) | ARIMA Dodging: %.2f (BOOST PREDADOR)", (confiancaMRM * 3.0)); 
         } else if (getOthers() > 1) { 
             txtPesos = String.format(Locale.US, "Confiança Motor -> Surf: %.2f (BOOST MELEE) | MRM: %.2f", (confiancaSurfing * 2.5), confiancaMRM);
         }
@@ -214,7 +219,7 @@ public class BT_7274 extends AdvancedRobot {
             
             int raio = (int) o.distanciaPercorrida;
             g.setColor(new Color(0, 255, 255, 50)); 
-            g.drawOval((int)o.posicaoCanhao.x - raio, (int)o.posicaoCanhao.y - raio, raio * 2, raio * 2);
+            g.drawOval((int)(o.posicaoCanhao.x - raio), (int)(o.posicaoCanhao.y - raio), raio * 2, raio * 2);
             g.setColor(new Color(0, 255, 255, 180)); 
         }
 
@@ -236,7 +241,7 @@ public class BT_7274 extends AdvancedRobot {
             g.setColor(new Color(0, 255, 255, 150)); 
             g.drawOval((int)pontoAlvo.x - 15, (int)pontoAlvo.y - 15, 30, 30);
             g.drawLine((int)meuRobo.x, (int)meuRobo.y, (int)pontoAlvo.x, (int)pontoAlvo.y);
-            g.drawString("Destino (MRM)", (int)pontoAlvo.x + 20, (int)pontoAlvo.y);
+            g.drawString("Destino (MRM/ARIMA)", (int)pontoAlvo.x + 20, (int)pontoAlvo.y);
         }
         
         // RENDERIZAÇÃO DAS SHADOW WAVES E MULTI-WAVE (PAINT NOVO COM OVAL GIGANTE)
@@ -313,6 +318,34 @@ public class BT_7274 extends AdvancedRobot {
     }
 
     // =========================================================
+    // EVENTO DE COLISÃO COM PAREDE E ROBÔS (FIX DE TRAVAMENTO E DETECÇÃO IMEDIATA)
+    // =========================================================
+    public void onHitWall(HitWallEvent e) {
+        direcaoLateral = -direcaoLateral;
+        moveDirection1v1 *= -1; // Adaptação do arquivo novo
+        tempoInativo = 100; // Força recálculo imediato do MRM
+        if (movimento1VS1 != null) {
+            movimento1VS1.direcao = -movimento1VS1.direcao;
+        }
+        pontoAlvo.setLocation(getBattleFieldWidth() / 2.0, getBattleFieldHeight() / 2.0); // Força mira para o centro da arena
+        setBack(40); // Dá um "tranco" mecânico para escapar da física da parede
+    }
+    
+    public void onHitRobot(HitRobotEvent e) {
+        moveDirection1v1 *= -1;
+        direcaoLateral = -direcaoLateral;
+        
+        // Se um robô bater na gente, ativamos o Clinger Detection instantâneo do arquivo!
+        if (alvo != null && e.getName().equals(alvo.nome)) {
+            alvo.ehClinger = true;
+        }
+        Robo r = listaInimigos.get(e.getName());
+        if (r != null) {
+            r.ehClinger = true;
+        }
+    }
+
+    // =========================================================
     // CLASSES AUXILIARES (Estruturas de Dados Customizadas)
     // =========================================================
     class Robo extends Point2D.Double {
@@ -341,6 +374,11 @@ public class BT_7274 extends AdvancedRobot {
         public boolean classificadoComoIntermediario = false; 
         public boolean ehClinger = false; // Detecção de grudadores/seguidores
         public int ticksPertoClinger = 0;
+        
+        // Novas Variáveis Integradas para ARMA/ARIMA 1v1
+        public double avgVelocity1v1 = 0;
+        public double avgHeadingChange1v1 = 0;
+        public List<java.lang.Double> shotBearings1v1 = new ArrayList<>(); // Corrigido o Shadowing
         
         public int ticksParado = 0; 
         public int ticksDesdeReversao = 0;
@@ -588,7 +626,7 @@ public class BT_7274 extends AdvancedRobot {
             MARGEM_PAREDE, MARGEM_PAREDE,
             LARGURA_CAMPO - MARGEM_PAREDE * 2, ALTURA_CAMPO - MARGEM_PAREDE * 2
         );
-        private double direcao = 0.4;
+        public double direcao = 0.4;
         
         Movimento_1VS1(AdvancedRobot _robô) {
             this.robô = _robô;
@@ -676,8 +714,8 @@ public class BT_7274 extends AdvancedRobot {
                 
                 for (int i = 0; i < BINS; i++) {
                     double distanciaBin = Math.abs(binCorreto - i);
-                    if (distanciaBin <= 5) { 
-                        buffer[i] += (int) Math.round(pesoBase / (Math.pow(2, distanciaBin)));
+                    if (distanciaBin <= 10) { // Tolerância ajustada proporcionalmente para 101 bins
+                        buffer[i] += (int) Math.round(pesoBase / (Math.pow(2, distanciaBin / 2.0)));
                     }
                 }
                 
@@ -691,15 +729,15 @@ public class BT_7274 extends AdvancedRobot {
                         }
                     }
 
-                    if (binVotoAuxiliar != -1 && Math.abs(binCorreto - binVotoAuxiliar) <= 2) alvoOnda.acertosVirtualGuns[0]++;
-                    if (binVotoARMA != -1 && Math.abs(binCorreto - binVotoARMA) <= 2) alvoOnda.acertosVirtualGuns[1]++;
-                    if (binVotoARIMA != -1 && Math.abs(binCorreto - binVotoARIMA) <= 2) alvoOnda.acertosVirtualGuns[2]++;
-                    if (binVotoRNA != -1 && Math.abs(binCorreto - binVotoRNA) <= 2) alvoOnda.acertosVirtualGuns[3]++;
-                    if (binVotoDC != -1 && Math.abs(binCorreto - binVotoDC) <= 2) alvoOnda.acertosVirtualGuns[4]++;
-                    if (binVotoAntiTremidinha != -1 && Math.abs(binCorreto - binVotoAntiTremidinha) <= 2) alvoOnda.acertosVirtualGuns[5]++;
-                    if (binVotoMedia != -1 && Math.abs(binCorreto - binVotoMedia) <= 2) alvoOnda.acertosVirtualGuns[6]++;
-                    if (binVotoKNN != -1 && Math.abs(binCorreto - binVotoKNN) <= 2) alvoOnda.acertosVirtualGuns[7]++;
-                    if (binVotoGunWave != -1 && Math.abs(binCorreto - binVotoGunWave) <= 2) alvoOnda.acertosVirtualGuns[8]++;
+                    if (binVotoAuxiliar != -1 && Math.abs(binCorreto - binVotoAuxiliar) <= 4) alvoOnda.acertosVirtualGuns[0]++;
+                    if (binVotoARMA != -1 && Math.abs(binCorreto - binVotoARMA) <= 4) alvoOnda.acertosVirtualGuns[1]++;
+                    if (binVotoARIMA != -1 && Math.abs(binCorreto - binVotoARIMA) <= 4) alvoOnda.acertosVirtualGuns[2]++;
+                    if (binVotoRNA != -1 && Math.abs(binCorreto - binVotoRNA) <= 4) alvoOnda.acertosVirtualGuns[3]++;
+                    if (binVotoDC != -1 && Math.abs(binCorreto - binVotoDC) <= 4) alvoOnda.acertosVirtualGuns[4]++;
+                    if (binVotoAntiTremidinha != -1 && Math.abs(binCorreto - binVotoAntiTremidinha) <= 4) alvoOnda.acertosVirtualGuns[5]++;
+                    if (binVotoMedia != -1 && Math.abs(binCorreto - binVotoMedia) <= 4) alvoOnda.acertosVirtualGuns[6]++;
+                    if (binVotoKNN != -1 && Math.abs(binCorreto - binVotoKNN) <= 4) alvoOnda.acertosVirtualGuns[7]++;
+                    if (binVotoGunWave != -1 && Math.abs(binCorreto - binVotoGunWave) <= 4) alvoOnda.acertosVirtualGuns[8]++;
                     
                     for (int j = 0; j < 9; j++) {
                         alvoOnda.acertosVirtualGuns[j] *= 0.95; 
@@ -1020,9 +1058,9 @@ public class BT_7274 extends AdvancedRobot {
                 bot.escolheuArmaNaturalmente = true; 
             }
             
-            // --- OVERRIDE: Se Clinger, usa a Auxiliar (0) ---
+            // --- OVERRIDE: Se Clinger, usa apenas o KNN Pesado (7) ---
             if (bot.alvo != null && bot.alvo.ehClinger) {
-                melhorVG = 0;
+                melhorVG = 7;
                 bot.escolheuArmaNaturalmente = false;
             }
             // --- OVERRIDE: Se 1v1 e não for surfer, usa a Auxiliar (0) ---
@@ -1030,11 +1068,27 @@ public class BT_7274 extends AdvancedRobot {
                 melhorVG = 0;
                 bot.escolheuArmaNaturalmente = false;
             } 
-            // --- OVERRIDE: Se for Surfer, trava na GunWave GF (8) e salva para a partida toda ---
+            // --- OVERRIDE: Se for Surfer, alterna entre as melhores armas (5, 7, 8) e trava na de maior precisão ---
             else if (bot.alvo != null && bot.alvo.classificadoComoSurfer) {
-                melhorVG = 8;
+                int[] vgsAntiSurfer = {5, 7, 8}; // Anti-Trem, KNN Pesado, GunWave GF
+                int melhorVGParaSurfer = 8;
+                double maxScoreSurfer = -1.0;
+                
+                // Alterna no começo enquanto coleta dados
+                if (bot.alvo.acertosVirtualGuns[5] < 0.5 && bot.alvo.acertosVirtualGuns[7] < 0.5 && bot.alvo.acertosVirtualGuns[8] < 0.5) {
+                    melhorVGParaSurfer = vgsAntiSurfer[(bot.getRoundNum() + bot.totalTirosDisparados) % 3];
+                } else {
+                    for (int idx : vgsAntiSurfer) {
+                        if (bot.alvo.acertosVirtualGuns[idx] > maxScoreSurfer) {
+                            maxScoreSurfer = bot.alvo.acertosVirtualGuns[idx];
+                            melhorVGParaSurfer = idx;
+                        }
+                    }
+                }
+                
+                melhorVG = melhorVGParaSurfer;
                 bot.escolheuArmaNaturalmente = false;
-                BT_7274.armaTravada = 8;
+                BT_7274.armaTravada = melhorVG;
             }
 
             bot.ultimaVGEscolhida = melhorVG;
@@ -1210,20 +1264,6 @@ public class BT_7274 extends AdvancedRobot {
             } else {
                 inimigo.ticksParado = 0;
             }
-
-            // MODO CLINGER: DETECÇÃO
-            if (e.getDistance() < 230) {
-                inimigo.ticksPertoClinger++;
-            } else if (e.getDistance() > 310) {
-                inimigo.ticksPertoClinger = Math.max(0, inimigo.ticksPertoClinger - 1);
-            }
-
-            if (inimigo.ticksPertoClinger > 50) {
-                inimigo.ehClinger = true;
-                inimigo.classificadoComoSurfer = false; // Corrige falso positivo
-            } else if (inimigo.ticksPertoClinger == 0) {
-                inimigo.ehClinger = false;
-            }
             
             double quedaEnergia = inimigo.energiaAnterior - e.getEnergy();
             if (quedaEnergia > 0 && quedaEnergia <= 3) {
@@ -1268,7 +1308,7 @@ public class BT_7274 extends AdvancedRobot {
             boolean isClinger = distParedeInimigo < 60; 
             boolean isLinear = inimigo.reversoesLaterais < 2 && inimigo.historicoVelocidade.size() >= 30;
             
-            // Detecção de seguidor/perseguidor (Intermediário)
+            // NOVO: Detecção de seguidor/perseguidor (Intermediário)
             boolean isFollower = false;
             if (inimigo.historicoVelocidade.size() > 10) {
                 double anguloParaBT = Utils.normalAbsoluteAngle(getHeadingRadians() + e.getBearingRadians() + Math.PI);
@@ -1316,11 +1356,6 @@ public class BT_7274 extends AdvancedRobot {
             if (inimigo.fatorSurf > 0.4) {
                 inimigo.classificadoComoSurfer = true;
             } else if (inimigo.fatorSurf == 0.0 && inimigo.reversoesLaterais < 3) {
-                inimigo.classificadoComoSurfer = false;
-            }
-
-            // Impede Surfing falso no Clinger
-            if (inimigo.ehClinger) {
                 inimigo.classificadoComoSurfer = false;
             }
             
@@ -1420,6 +1455,11 @@ public class BT_7274 extends AdvancedRobot {
             if (inimigo.historicoVelocidade.size() > 50) inimigo.historicoVelocidade.removeLast();
             if (inimigo.historicoDeltaDirecao.size() > 50) inimigo.historicoDeltaDirecao.removeLast();
             
+            // INTEGRAÇÃO: Atualizando perfis de predição do arquivo upado
+            double hChange1v1 = Utils.normalRelativeAngle(inimigo.direcao - inimigo.ultimaDirecao);
+            inimigo.avgVelocity1v1 = (inimigo.velocidade * 0.7) + (inimigo.avgVelocity1v1 * 0.3);
+            inimigo.avgHeadingChange1v1 = (hChange1v1 * 0.7) + (inimigo.avgHeadingChange1v1 * 0.3);
+            
             double distParedeInimigo = Math.min(
                 Math.min(inimigo.x, campoBatalha.width - inimigo.x), 
                 Math.min(inimigo.y, campoBatalha.height - inimigo.y)
@@ -1427,7 +1467,7 @@ public class BT_7274 extends AdvancedRobot {
             boolean isClinger = distParedeInimigo < 60; 
             boolean isLinear = inimigo.reversoesLaterais < 2 && inimigo.historicoVelocidade.size() >= 30;
             
-            // Detecção de seguidor/perseguidor (Intermediário) no 1v1
+            // NOVO: Detecção de seguidor/perseguidor (Intermediário) no 1v1
             boolean isFollower = false;
             if (inimigo.historicoVelocidade.size() > 10) {
                 double anguloParaBT = Utils.normalAbsoluteAngle(getHeadingRadians() + e.getBearingRadians() + Math.PI);
@@ -1491,144 +1531,172 @@ public class BT_7274 extends AdvancedRobot {
             if (inimigo.velocidade != 0) {
                 direcaoLateral = Utilitario.sinal(velLateralAtual);
             }
-                
-            Onda onda = new Onda(this);
-            onda.posicaoCanhao = new Point2D.Double(getX(), getY());
-            onda.posicaoAlvo = inimigo;
-            onda.direcaoLateralOnda = direcaoLateral;
-            onda.definirSegmentacoes(inimigo.distancia, inimigo.velocidade, velocidadeInimigoAnterior);
             
-            double aceleracaoAtual = inimigo.velocidade - velocidadeInimigoAnterior;
-            onda.featuresKNN = new double[] {
-                inimigo.velocidade,
-                inimigo.direcao - inimigo.ultimaDirecao,
-                inimigo.distancia,
-                velLateralAtual,
-                aceleracaoAtual,
-                inimigo.ticksDesdeReversao
-            };
-            
-            if(alvo != null && alvo.saldoPrecisao > 5) {
-                onda.pesoImpacto = 12.0; 
-            }
-            
-            velocidadeInimigoAnterior = inimigo.velocidade;
-            onda.angulo = inimigo.anguloAbsolutoRadianos;
-            
-            potenciaTiroCorrente = Math.min(3, Math.min(this.getEnergy(), e.getEnergy()) / 4.0);
-            if (getEnergy() < 2 && e.getDistance() < 500) {
-                potenciaTiroCorrente = 0.1; 
-            } else if (e.getDistance() >= 500) {
-                potenciaTiroCorrente = 1.1; 
-            }
-            if (inimigo.distancia < 150 || inimigo.ehClinger) {
-                potenciaTiroCorrente = Math.min(3.0, getEnergy() / 12); 
-            }
-            if (alvo != null && alvo.saldoPrecisao > 40.0) {
-                potenciaTiroCorrente = Math.max(potenciaTiroCorrente, 2.9); 
-            }
-            if (inimigo.ehClinger) {
-                potenciaTiroCorrente = 3.0; // Tiro máximo no clinger
-            }
-            onda.potenciaTiro = potenciaTiroCorrente;
-            
-            if (inimigoTicksParado_1v1 > 5) {
-                setTurnGunRightRadians(Utils.normalRelativeAngle(inimigo.anguloAbsolutoRadianos - getGunHeadingRadians()));
+            // =========================================================
+            // LÓGICA DE TIRO (OVERRIDE ARMA PARA NÃO-SURFERS OU ONDAS PARA SURFERS)
+            // =========================================================
+            if (!inimigo.classificadoComoSurfer) {
+                // NOVA LÓGICA DE TIRO ARMA (DO ARQUIVO UPADO)
+                double firePower = Math.min(3.0, 400.0 / inimigo.distancia);
+                if (inimigo.ehClinger) firePower = 3.0; // Tiro máximo no clinger
+                firePower = Math.min(firePower, getEnergy() / 12);
+                firePower = Math.min(3.0, Math.min(getEnergy(), e.getEnergy()) / 4.0);
                 
-                miraVisual.setLocation(
-                    getX() + Math.sin(inimigo.anguloAbsolutoRadianos) * inimigo.distancia,
-                    getY() + Math.cos(inimigo.anguloAbsolutoRadianos) * inimigo.distancia
-                );
+                double bulletSpeed = 20 - (3 * firePower);
                 
-                boolean atirouReal = false;
-                if (getGunHeat() == 0.0 && Math.abs(getGunTurnRemaining()) < 0.05) { 
-                    Bullet b = setFireBullet(onda.potenciaTiro);
-                    if (b != null) {
-                        atirouReal = true;
-                        totalTirosDisparados++;
-                        minhasBalasAtivas.add(b);
-                    }
-                }
+                double predX = getX() + Math.sin(inimigo.anguloAbsolutoRadianos) * inimigo.distancia;
+                double predY = getY() + Math.cos(inimigo.anguloAbsolutoRadianos) * inimigo.distancia;
+                double simHeading = inimigo.direcao;
                 
-                if ((atirouReal || getTime() >= tempoArmaVirtual_1v1) && getEnergy() >= onda.potenciaTiro) {
-                    onda.alvoOnda = inimigo; 
-                    addCustomEvent(onda);
-                    tempoArmaVirtual_1v1 = getTime() + (long) Math.ceil(Rules.getGunHeat(onda.potenciaTiro) / getGunCoolingRate());
-                }
-                
-            } else {
-                double tempoEstimadoVoo = inimigo.distancia / Rules.getBulletSpeed(onda.potenciaTiro);
-                onda.registrarMirasAuxiliares(inimigo, meuRobo, tempoEstimadoVoo);
-                onda.registrarMirasARMA_ARIMA(inimigo, meuRobo, tempoEstimadoVoo, getOthers());
-                
-                onda.registrarMiraKNNPesado(inimigo, meuRobo);
-                
-                double offsetFinal = onda.offsetAnguloMaisVisitado();
-                onda.offsetEscolhido = offsetFinal; 
-                
-                miraVisual.setLocation(
-                    getX() + Math.sin(onda.angulo + offsetFinal) * inimigo.distancia,
-                    getY() + Math.cos(onda.angulo + offsetFinal) * inimigo.distancia
-                );
-                
-                setTurnGunRightRadians(Utils.normalRelativeAngle(
-                        inimigo.anguloAbsolutoRadianos - getGunHeadingRadians() + offsetFinal));
-                
-                if (ultimaVGEscolhida != vgAnteriorLog) {
-                    if (ultimaVGEscolhida == -1) {
-                        System.out.println("[BT-7274] Trocando Arma -> Coletando Dados (Padrão)");
-                    } else {
-                        String txtAdicional = "";
-                        double precisaoGlobalLog = totalTirosDisparados > 0 ? ((double)totalTirosAcertados / totalTirosDisparados) * 100.0 : 100.0;
-                        boolean forcarPorDerrotasLog = (alvo != null && alvo.nome != null && derrotasSeguidas.getOrDefault(alvo.nome, 0) > 5);
-                        boolean ehAvancadoLog = (alvo != null && (!alvo.classificadoComoBasico && !alvo.classificadoComoIntermediario || alvo.classificadoComoSurfer || alvo.reversoesLaterais > 3));
-                        
-                        if (getOthers() <= 1 && ehAvancadoLog && !escolheuArmaNaturalmente && ultimaVGEscolhida == 8) {
-                            txtAdicional = " (Forçada - Surfing 1v1 Dedicado Ativo!)";
-                        } else if (forcarPorDerrotasLog && !escolheuArmaNaturalmente) {
-                            txtAdicional = " (Forçada - >5 Derrotas Seguidas! Alternando)";
-                        } else if (!escolheuArmaNaturalmente && ultimaVGEscolhida >= 7 && ultimaVGEscolhida != 0 && ultimaVGEscolhida != 8) {
-                            txtAdicional = " (Forçada por Inatividade / Alternando)";
-                        } else if (totalTirosDisparados >= 15 && precisaoGlobalLog < 10.0 && !escolheuArmaNaturalmente) {
-                            txtAdicional = " (Forçada - Precisão Global < 10%! Alternando)"; 
-                        } else if (alvo != null && alvo.ehClinger) {
-                            txtAdicional = " (Lock: Auxiliar Anti-Clinger Ativo!)";
-                        } else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer && ultimaVGEscolhida == 0) {
-                            txtAdicional = " (Lock: Auxiliar Anti-NonSurfer Ativo!)";
-                        } else if (alvo != null && alvo.classificadoComoSurfer && ultimaVGEscolhida == 8) {
-                            txtAdicional = " (Lock: GunWave GF vs Surfer!)";
-                        }
-                        System.out.println("[BT-7274] Trocando Arma -> " + NOMES_VG[ultimaVGEscolhida] + txtAdicional);
-                    }
-                    vgAnteriorLog = ultimaVGEscolhida;
+                for (int i = 0; i < 100; i++) {
+                    double time = Math.hypot(getX() - predX, getY() - predY) / bulletSpeed;
+                    if (i >= time) break;
+
+                    simHeading += inimigo.avgHeadingChange1v1;
+                    predX += Math.sin(simHeading) * inimigo.avgVelocity1v1;
+                    predY += Math.cos(simHeading) * inimigo.avgVelocity1v1;
+
+                    predX = Math.max(18, Math.min(getBattleFieldWidth() - 18, predX));
+                    predY = Math.max(18, Math.min(getBattleFieldHeight() - 18, predY));
                 }
 
-                boolean atirouReal = false;
-                if (getGunHeat() == 0.0 && Math.abs(getGunTurnRemaining()) < 0.05) { 
-                    Bullet b = setFireBullet(onda.potenciaTiro);
+                double finalAngle = Math.atan2(predX - getX(), predY - getY());
+                double gunTurn = Utils.normalRelativeAngle(finalAngle - getGunHeadingRadians());
+                setTurnGunRightRadians(gunTurn);
+                
+                miraVisual.setLocation(predX, predY);
+                ultimaVGEscolhida = 1; // 1 = "ARMA"
+
+                if (getGunHeat() == 0 && Math.abs(gunTurn) < 0.1) {
+                    Bullet b = setFireBullet(firePower);
                     if (b != null) {
-                        atirouReal = true;
                         totalTirosDisparados++;
                         minhasBalasAtivas.add(b);
-                        if (ultimaVGEscolhida != -1) {
-                            rastreioBalasVG.put(b, ultimaVGEscolhida); 
-                            disparosReaisVG[ultimaVGEscolhida]++;
-                        }
                     }
                 }
+            } else {
+                // LÓGICA ORIGINAL DE GUN WAVE / VGs PARA SURFERS
+                Onda onda = new Onda(this);
+                onda.posicaoCanhao = new Point2D.Double(getX(), getY());
+                onda.posicaoAlvo = inimigo;
+                onda.direcaoLateralOnda = direcaoLateral;
+                onda.definirSegmentacoes(inimigo.distancia, inimigo.velocidade, velocidadeInimigoAnterior);
                 
-                if ((atirouReal || getTime() >= tempoArmaVirtual_1v1) && getEnergy() >= onda.potenciaTiro) {
-                    onda.alvoOnda = inimigo; 
-                    addCustomEvent(onda); 
-                    ondasAtivas.add(onda); 
-                    
-                    tempoArmaVirtual_1v1 = getTime() + (long) Math.ceil(Rules.getGunHeat(onda.potenciaTiro) / getGunCoolingRate());
+                double aceleracaoAtual = inimigo.velocidade - velocidadeInimigoAnterior;
+                onda.featuresKNN = new double[] {
+                    inimigo.velocidade,
+                    inimigo.direcao - inimigo.ultimaDirecao,
+                    inimigo.distancia,
+                    velLateralAtual,
+                    aceleracaoAtual,
+                    inimigo.ticksDesdeReversao
+                };
+                
+                if(alvo != null && alvo.saldoPrecisao > 5) {
+                    onda.pesoImpacto = 12.0; 
                 }
-            }
+                
+                potenciaTiroCorrente = Math.min(3, Math.min(this.getEnergy(), e.getEnergy()) / 4.0);
+                if (getEnergy() < 2 && e.getDistance() < 500) {
+                    potenciaTiroCorrente = 0.1; 
+                } else if (e.getDistance() >= 500) {
+                    potenciaTiroCorrente = 1.1; 
+                }
+                if (alvo != null && alvo.saldoPrecisao > 40.0) {
+                    potenciaTiroCorrente = Math.max(potenciaTiroCorrente, 2.9); 
+                }
+                onda.potenciaTiro = potenciaTiroCorrente;
+                
+                if (inimigoTicksParado_1v1 > 5) {
+                    setTurnGunRightRadians(Utils.normalRelativeAngle(inimigo.anguloAbsolutoRadianos - getGunHeadingRadians()));
+                    
+                    miraVisual.setLocation(
+                        getX() + Math.sin(inimigo.anguloAbsolutoRadianos) * inimigo.distancia,
+                        getY() + Math.cos(inimigo.anguloAbsolutoRadianos) * inimigo.distancia
+                    );
+                    
+                    boolean atirouReal = false;
+                    if (getGunHeat() == 0.0 && Math.abs(getGunTurnRemaining()) < 0.05) { 
+                        Bullet b = setFireBullet(onda.potenciaTiro);
+                        if (b != null) {
+                            atirouReal = true;
+                            totalTirosDisparados++;
+                            minhasBalasAtivas.add(b);
+                        }
+                    }
+                    
+                    if ((atirouReal || getTime() >= tempoArmaVirtual_1v1) && getEnergy() >= onda.potenciaTiro) {
+                        onda.alvoOnda = inimigo; 
+                        addCustomEvent(onda);
+                        tempoArmaVirtual_1v1 = getTime() + (long) Math.ceil(Rules.getGunHeat(onda.potenciaTiro) / getGunCoolingRate());
+                    }
+                    
+                } else {
+                    double tempoEstimadoVoo = inimigo.distancia / Rules.getBulletSpeed(onda.potenciaTiro);
+                    onda.registrarMirasAuxiliares(inimigo, meuRobo, tempoEstimadoVoo);
+                    onda.registrarMirasARMA_ARIMA(inimigo, meuRobo, tempoEstimadoVoo, getOthers());
+                    onda.registrarMiraKNNPesado(inimigo, meuRobo);
+                    
+                    double offsetFinal = onda.offsetAnguloMaisVisitado();
+                    onda.offsetEscolhido = offsetFinal; 
+                    
+                    miraVisual.setLocation(
+                        getX() + Math.sin(onda.angulo + offsetFinal) * inimigo.distancia,
+                        getY() + Math.cos(onda.angulo + offsetFinal) * inimigo.distancia
+                    );
+                    
+                    setTurnGunRightRadians(Utils.normalRelativeAngle(
+                            inimigo.anguloAbsolutoRadianos - getGunHeadingRadians() + offsetFinal));
+                    
+                    if (ultimaVGEscolhida != vgAnteriorLog) {
+                        System.out.println("[BT-7274] Trocando Arma -> " + NOMES_VG[ultimaVGEscolhida] + " (Lock: Anti-Surfer Adaptativo)");
+                        vgAnteriorLog = ultimaVGEscolhida;
+                    }
+
+                    boolean atirouReal = false;
+                    if (getGunHeat() == 0.0 && Math.abs(getGunTurnRemaining()) < 0.05) { 
+                        Bullet b = setFireBullet(onda.potenciaTiro);
+                        if (b != null) {
+                            atirouReal = true;
+                            totalTirosDisparados++;
+                            minhasBalasAtivas.add(b);
+                            if (ultimaVGEscolhida != -1) {
+                                rastreioBalasVG.put(b, ultimaVGEscolhida); 
+                                disparosReaisVG[ultimaVGEscolhida]++;
+                            }
+                        }
+                    }
+                    
+                    if ((atirouReal || getTime() >= tempoArmaVirtual_1v1) && getEnergy() >= onda.potenciaTiro) {
+                        onda.alvoOnda = inimigo; 
+                        addCustomEvent(onda); 
+                        ondasAtivas.add(onda); 
+                        
+                        tempoArmaVirtual_1v1 = getTime() + (long) Math.ceil(Rules.getGunHeat(onda.potenciaTiro) / getGunCoolingRate());
+                    }
+                }
+            } // Fim de Else Tiro Surfer
+            
+            velocidadeInimigoAnterior = inimigo.velocidade;
             
             double quedaEnergia = energiaInimigoAnterior_1v1 - e.getEnergy();
             if (quedaEnergia > 0 && quedaEnergia <= 3.0) {
                 inimigo.agressividade += 0.1; 
+                
+                // INTEGRAÇÃO: ARIMA DODGING DO ARQUIVO UPADO (SOMENTE PARA NÃO-SURFERS)
+                if (!inimigo.classificadoComoSurfer) {
+                    inimigo.shotBearings1v1.add(e.getBearingRadians());
+                    if (inimigo.shotBearings1v1.size() > 20) inimigo.shotBearings1v1.remove(0);
+                    
+                    double predictNextShotAngle = 0;
+                    if (inimigo.shotBearings1v1.size() >= 3) {
+                        double lastDiff = inimigo.shotBearings1v1.get(inimigo.shotBearings1v1.size()-1) - inimigo.shotBearings1v1.get(inimigo.shotBearings1v1.size()-2);
+                        predictNextShotAngle = inimigo.shotBearings1v1.get(inimigo.shotBearings1v1.size()-1) + lastDiff;
+                    }
+                    if (Math.abs(predictNextShotAngle) < 0.3) { 
+                        moveDirection1v1 *= -1; 
+                    }
+                }
                 
                 OndaInimiga ondaInimiga = new OndaInimiga();
                 ondaInimiga.tempoDisparo = getTime() - 1;
@@ -1640,19 +1708,39 @@ public class BT_7274 extends AdvancedRobot {
                 ondasInimigas.add(ondaInimiga);
             }
             energiaInimigoAnterior_1v1 = e.getEnergy();
-                
-            movimento1VS1.onScannedRobot(e); 
             
-            if (inimigo.distancia < 250) { 
-                setTurnRightRadians(Utils.normalRelativeAngle(inimigo.anguloAbsolutoRadianos + Math.PI/2 - 0.5));
-                setAhead(100);
+            // =========================================================
+            // LÓGICA DE MOVIMENTAÇÃO (OVERRIDE DINÂMICO PARA NÃO-SURFERS OU SURFING PARA SURFERS)
+            // =========================================================
+            if (!inimigo.classificadoComoSurfer) {
+                // NOVA LÓGICA DE MOVIMENTO DINÂMICO (DO ARQUIVO UPADO)
+                double desiredDist = 50;  // Padrão: Agressivo
+                double aggression = 0.005;
+
+                // Se o mapa diz que ele é um Clinger, a estratégia muda completamente
+                if (inimigo.ehClinger) {
+                    desiredDist = 200; // Mantém o contato a longa distância
+                    aggression = 0.02; // Curva de fuga forte caso ele tente se aproximar
+                } else if (inimigo.distancia < 30) {
+                    // Reflexo de Sobrevivência (Caso um bot normal nos surpreenda)
+                    desiredDist = 90;
+                    aggression = 0.02;
+                }
+
+                double distError = inimigo.distancia - desiredDist;
+                double turnAngle = e.getBearingRadians() + (Math.PI / 2) - (distError * aggression * moveDirection1v1);
+                
+                setTurnRightRadians(Utils.normalRelativeAngle(turnAngle));
+                setAhead(150 * moveDirection1v1);
             } else {
-                if (habilitarSurfing) {
-                    boolean deveSurfar = true;
-                    if (alvo != null && alvo.classificadoComoBasico && !alvo.classificadoComoSurfer) {
-                        deveSurfar = false;
-                    }
-                    if (deveSurfar) {
+                // LÓGICA ORIGINAL DE WAVE SURFING
+                movimento1VS1.onScannedRobot(e); 
+                
+                if (inimigo.distancia < 250) { 
+                    setTurnRightRadians(Utils.normalRelativeAngle(inimigo.anguloAbsolutoRadianos + Math.PI/2 - 0.5));
+                    setAhead(100);
+                } else {
+                    if (habilitarSurfing) {
                         executarSurfing(); 
                     }
                 }
@@ -1703,9 +1791,9 @@ public class BT_7274 extends AdvancedRobot {
             else if (forcarPorDerrotasMetrica && !escolheuArmaNaturalmente) sufixo = " (Lock Vingança: Alternando)";
             else if (!escolheuArmaNaturalmente && ultimaVGEscolhida >= 7 && ultimaVGEscolhida != 0 && ultimaVGEscolhida != 8) sufixo = " (Forçada por Inatividade / Alternando)";
             else if (totalTirosDisparados >= 15 && hitRate < 10.0 && !escolheuArmaNaturalmente) sufixo = " (Lock Precaução: Precisão < 10% - Alternando)";
-            else if (alvo != null && alvo.ehClinger) sufixo = " (Lock: Auxiliar Anti-Clinger)";
-            else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer && ultimaVGEscolhida == 0) sufixo = " (Lock: Auxiliar Anti-NonSurfer)";
-            else if (alvo != null && alvo.classificadoComoSurfer && ultimaVGEscolhida == 8) sufixo = " (Lock: GunWave GF vs Surfer)";
+            else if (alvo != null && alvo.ehClinger) sufixo = " (Lock: ARMA Analítica Anti-Clinger - Orbita 200px)";
+            else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer && ultimaVGEscolhida == 0) sufixo = " (Lock: Auxiliar Anti-NonSurfer - Orbita 300px)";
+            else if (alvo != null && alvo.classificadoComoSurfer && (ultimaVGEscolhida == 5 || ultimaVGEscolhida == 7 || ultimaVGEscolhida == 8)) sufixo = " (Lock: Anti-Surfer Adaptativo)";
             
             System.out.println(" Arma Ativa Final : " + NOMES_VG[ultimaVGEscolhida] + sufixo);
         }
@@ -1765,20 +1853,20 @@ public class BT_7274 extends AdvancedRobot {
         double pesoM_Final = confiancaMRM;
         if (alvo != null && alvo.ehClinger) {
             pesoS_Final = 0.0;
-            pesoM_Final = 100.0;
+            pesoM_Final = 100.0; // Foca 100% em evasão posicional orbital
         } else if (getOthers() <= 1 && alvo != null && alvo.classificadoComoSurfer) {
-            pesoS_Final = 1.0;
-            pesoM_Final = 0.0;
+            pesoS_Final = 1.0; 
+            pesoM_Final = 0.0; 
         } else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
             pesoS_Final = 0.0; 
             pesoM_Final *= 3.0; 
         } else if (getOthers() > 1) { 
-            pesoS_Final *= 2.5;
+            pesoS_Final *= 2.5; 
         }
         
         System.out.println(String.format(Locale.US, " Confiança Final  -> Surfing: %.2f | MRM: %.2f", pesoS_Final, pesoM_Final));
         if (alvo != null && alvo.ehClinger) {
-             System.out.println(" Override Clinger : Modo Anti-Clinger (WS OFF, MRM 100x)");
+             System.out.println(" Override Clinger : Modo Anti-Clinger (WS OFF, MRM 100x, Orbita 200px)");
         } else if (getOthers() <= 1 && alvo != null && alvo.classificadoComoSurfer) {
              System.out.println(" Override 1v1     : MRM Desativado (Foco TOTAL no Wave Surfing)");
         } else if (getOthers() <= 1 && alvo != null && !alvo.classificadoComoSurfer) {
@@ -2165,6 +2253,13 @@ public class BT_7274 extends AdvancedRobot {
                             pesoCanto / Math.max(1, distC4);
                             
         riscoMRM += votoCentro + votoCantos;
+
+        // --- FIX DE PAREDE: Repulsão forte contra bordas para não travar ---
+        double dEsq = Math.max(1.0, px - 35.0);
+        double dDir = Math.max(1.0, cw - 35.0 - px);
+        double dBaixo = Math.max(1.0, py - 35.0);
+        double dCima = Math.max(1.0, ch - 35.0 - py);
+        riscoMRM += 25000.0 / (dEsq * dEsq) + 25000.0 / (dDir * dDir) + 25000.0 / (dBaixo * dBaixo) + 25000.0 / (dCima * dCima);
         
         boolean existeInimigoVivo = false;
         int botsBasicosVivos = 0; 
@@ -2184,9 +2279,13 @@ public class BT_7274 extends AdvancedRobot {
             
             double riscoBase = (1 / Math.max(1, distanciaSqInimigo));
             
-            // ANTI-CLINGER EXTREMO: Forçar movimento centrífugo repelente
-            if (inimigo.ehClinger && distReal < 190) {
-                riscoMRM += 350.0;
+            // MODO CLINGER 1v1: Repulsão extrema para garantir órbita perfeita de 200px sem colidir
+            if (numOthers <= 1 && inimigo.ehClinger) {
+                if (distReal < 185) {
+                    riscoMRM += 1000.0; // Evita colisão direta com escudo impenetrável
+                }
+            } else if (inimigo.ehClinger && distReal < 290) {
+                riscoMRM += 350.0; // Fallback pra melee
             }
             
             if (distReal < 300) riscoBase *= 10000.0; 
@@ -2238,6 +2337,13 @@ public class BT_7274 extends AdvancedRobot {
                 }
                 
                 double distanciaIdeal = Utilitario.limitar(baseDist + (inimigo.agressividade * 25.0), 100.0, maxDist);
+                
+                // --- NOVO OVERRIDE: Aproximar para órbita de 200px (se Clinger) ou 300px caso não seja Surfer ---
+                if (numOthers <= 1 && alvo.ehClinger) {
+                    distanciaIdeal = 200.0; // Órbita cravada em 200px contra Clinger em 1v1
+                } else if (!alvo.classificadoComoSurfer) {
+                    distanciaIdeal = 300.0; // Predador avança em alvo bobo (ORBITAL)
+                }
                 
                 double erroDistancia = Math.abs(distReal - distanciaIdeal);
                 riscoMRM += (erroDistancia * 35.5); 
@@ -2371,7 +2477,7 @@ public class BT_7274 extends AdvancedRobot {
         
         if (alvo != null && alvo.ehClinger) {
             pesoS = 0.0;
-            pesoM = 100.0; // Foca 100% em evasão posicional
+            pesoM = 100.0; // Foca 100% em evasão posicional orbital
         } else if (numOthers <= 1 && alvo != null && alvo.classificadoComoSurfer) {
             pesoS = 1.0; 
             pesoM = 0.0; 
