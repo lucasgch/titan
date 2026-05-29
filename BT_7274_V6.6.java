@@ -24,6 +24,7 @@ import robocode.util.Utils;
  * * DISTÂNCIA PREDADORA E FIX DE PAREDE: Repulsão matemática das paredes (Wall Hump Fix).
  * * INTEGRAÇÃO V2 (APENAS 1V1): Substituição do motor de Mira (ARMA) e Movimento (ARIMA+Dynamic) para Clingers e Básicos baseado no arquivo novo.
  * * FIX COMPILAÇÃO: Resolvido sombreamento da classe Double para java.lang.Double na lista de histórico de tiros.
+ * * NOVO MEMÓRIA CLINGER: Se o inimigo ficar grudado por >= 2 rounds, ele é classificado como Clinger pelo resto da partida!
  */
 public class BT_7274 extends AdvancedRobot {
     
@@ -74,6 +75,10 @@ public class BT_7274 extends AdvancedRobot {
     private static HashMap<String, Boolean> historicoSurferPorInimigo = new HashMap<>();
     private static HashMap<String, Boolean> historicoBasicoPorInimigo = new HashMap<>();
     private static HashMap<String, Boolean> historicoIntermediarioPorInimigo = new HashMap<>();
+    
+    // --- NOVO: MEMÓRIA PERMANENTE PARA CLINGERS (CONTA ROUNDS) ---
+    private static HashMap<String, Integer> roundsSendoClinger = new HashMap<>();
+    private HashSet<String> clingerDetectadoNesteRound = new HashSet<>();
     
     private List<Point2D.Double> caminhoSurfingVisualizado = new ArrayList<>();
     private Point2D.Double miraVisual = new Point2D.Double();
@@ -335,13 +340,21 @@ public class BT_7274 extends AdvancedRobot {
         moveDirection1v1 *= -1;
         direcaoLateral = -direcaoLateral;
         
-        // Se um robô bater na gente, ativamos o Clinger Detection instantâneo do arquivo!
-        if (alvo != null && e.getName().equals(alvo.nome)) {
-            alvo.ehClinger = true;
+        String nome = e.getName();
+        if (!clingerDetectadoNesteRound.contains(nome)) {
+            clingerDetectadoNesteRound.add(nome);
+            roundsSendoClinger.put(nome, roundsSendoClinger.getOrDefault(nome, 0) + 1);
         }
-        Robo r = listaInimigos.get(e.getName());
+        
+        // Se um robô bater na gente, ativamos o Clinger Detection instantâneo do arquivo!
+        if (alvo != null && nome.equals(alvo.nome)) {
+            alvo.ehClinger = true;
+            alvo.classificadoComoSurfer = false;
+        }
+        Robo r = listaInimigos.get(nome);
         if (r != null) {
             r.ehClinger = true;
+            r.classificadoComoSurfer = false;
         }
     }
 
@@ -1258,11 +1271,41 @@ public class BT_7274 extends AdvancedRobot {
                     this.ultimaVGEscolhida = historicoArmaPorInimigo.get(nomeInimigo);
                 }
             }
+
+            // E APLICAR O CLINGER DEFINITIVO DO ROUND ANTERIOR
+            if (roundsSendoClinger.getOrDefault(nomeInimigo, 0) >= 2) {
+                inimigo.ehClinger = true;
+                inimigo.classificadoComoSurfer = false;
+            }
             
             if (Math.abs(e.getVelocity()) < 1.5) {
                 inimigo.ticksParado++;
             } else {
                 inimigo.ticksParado = 0;
+            }
+            
+            // MODO CLINGER: DETECÇÃO
+            if (e.getDistance() < 230) {
+                inimigo.ticksPertoClinger++;
+            } else if (e.getDistance() > 310) {
+                inimigo.ticksPertoClinger = Math.max(0, inimigo.ticksPertoClinger - 1);
+            }
+
+            if (inimigo.ticksPertoClinger > 50) {
+                if (!clingerDetectadoNesteRound.contains(nomeInimigo)) {
+                    clingerDetectadoNesteRound.add(nomeInimigo);
+                    roundsSendoClinger.put(nomeInimigo, roundsSendoClinger.getOrDefault(nomeInimigo, 0) + 1);
+                }
+                inimigo.ehClinger = true;
+                inimigo.classificadoComoSurfer = false; // Corrige falso positivo
+            } else if (inimigo.ticksPertoClinger == 0 && roundsSendoClinger.getOrDefault(nomeInimigo, 0) < 2) {
+                inimigo.ehClinger = false;
+            }
+
+            // Se ele já foi clinger por >= 2 rounds na partida inteira, liga o override definitivo
+            if (roundsSendoClinger.getOrDefault(nomeInimigo, 0) >= 2) {
+                inimigo.ehClinger = true;
+                inimigo.classificadoComoSurfer = false;
             }
             
             double quedaEnergia = inimigo.energiaAnterior - e.getEnergy();
@@ -1420,6 +1463,12 @@ public class BT_7274 extends AdvancedRobot {
                 }
             }
 
+            // E APLICAR O CLINGER DEFINITIVO DO ROUND ANTERIOR
+            if (roundsSendoClinger.getOrDefault(nomeInimigo, 0) >= 2) {
+                inimigo.ehClinger = true;
+                inimigo.classificadoComoSurfer = false;
+            }
+
             alvo = inimigo; 
 
             inimigo.anguloAbsolutoRadianos = getHeadingRadians() + e.getBearingRadians();
@@ -1442,10 +1491,20 @@ public class BT_7274 extends AdvancedRobot {
             }
 
             if (inimigo.ticksPertoClinger > 50) {
+                if (!clingerDetectadoNesteRound.contains(nomeInimigo)) {
+                    clingerDetectadoNesteRound.add(nomeInimigo);
+                    roundsSendoClinger.put(nomeInimigo, roundsSendoClinger.getOrDefault(nomeInimigo, 0) + 1);
+                }
                 inimigo.ehClinger = true;
                 inimigo.classificadoComoSurfer = false; // Corrige falso positivo
-            } else if (inimigo.ticksPertoClinger == 0) {
+            } else if (inimigo.ticksPertoClinger == 0 && roundsSendoClinger.getOrDefault(nomeInimigo, 0) < 2) {
                 inimigo.ehClinger = false;
+            }
+
+            // Se ele já foi clinger por >= 2 rounds na partida inteira, liga o override definitivo
+            if (roundsSendoClinger.getOrDefault(nomeInimigo, 0) >= 2) {
+                inimigo.ehClinger = true;
+                inimigo.classificadoComoSurfer = false;
             }
             
             inimigo.setLocation(Utilitario.projetar(new Point2D.Double(getX(), getY()), inimigo.anguloAbsolutoRadianos, inimigo.distancia));
@@ -1741,7 +1800,13 @@ public class BT_7274 extends AdvancedRobot {
                     setAhead(100);
                 } else {
                     if (habilitarSurfing) {
-                        executarSurfing(); 
+                        boolean deveSurfar = true;
+                        if (alvo != null && alvo.classificadoComoBasico && !alvo.classificadoComoSurfer) {
+                            deveSurfar = false;
+                        }
+                        if (deveSurfar) {
+                            executarSurfing(); 
+                        }
                     }
                 }
             }
