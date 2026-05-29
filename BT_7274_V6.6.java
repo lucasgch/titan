@@ -22,9 +22,9 @@ import robocode.util.Utils;
  * * NOVO LOG DE ARMAS: Exibe no console a arma específica definida e travada para cada inimigo.
  * * UPGRADE DE CÁLCULO: BINS elevados para 101 e Pontos Previstos para 800, maximizando o poder de simulação da Gun Wave.
  * * DISTÂNCIA PREDADORA E FIX DE PAREDE: Repulsão matemática das paredes (Wall Hump Fix).
- * * INTEGRAÇÃO V2 (APENAS 1V1): Substituição do motor de Mira (ARMA) e Movimento (ARIMA+Dynamic) para Clingers e Básicos baseado no arquivo novo.
- * * FIX COMPILAÇÃO: Resolvido sombreamento da classe Double para java.lang.Double na lista de histórico de tiros.
- * * NOVO MEMÓRIA CLINGER: Se o inimigo ficar grudado por >= 2 rounds, ele é classificado como Clinger pelo resto da partida!
+ * * INTEGRAÇÃO V2 (APENAS 1V1): Substituição do motor de Mira (ARMA) e Movimento (ARIMA+Dynamic) baseado no arquivo novo.
+ * * FIX COMPILAÇÃO: Resolvido sombreamento da classe Double para java.lang.Double.
+ * * NOVO PESOS E PERFIL: Todos começam classificados como Clingers. Dados do 1v1 tem peso ampliado em 95%. Sensibilidade Surfer aumentada.
  */
 public class BT_7274 extends AdvancedRobot {
     
@@ -1272,7 +1272,10 @@ public class BT_7274 extends AdvancedRobot {
                 }
             }
 
-            // E APLICAR O CLINGER DEFINITIVO DO ROUND ANTERIOR
+            // MODO CLINGER GENÉRICO INICIAL
+            inimigo.ehClinger = true;
+
+            // APLICAR O CLINGER DEFINITIVO DO ROUND ANTERIOR
             if (roundsSendoClinger.getOrDefault(nomeInimigo, 0) >= 2) {
                 inimigo.ehClinger = true;
                 inimigo.classificadoComoSurfer = false;
@@ -1282,30 +1285,6 @@ public class BT_7274 extends AdvancedRobot {
                 inimigo.ticksParado++;
             } else {
                 inimigo.ticksParado = 0;
-            }
-            
-            // MODO CLINGER: DETECÇÃO
-            if (e.getDistance() < 230) {
-                inimigo.ticksPertoClinger++;
-            } else if (e.getDistance() > 310) {
-                inimigo.ticksPertoClinger = Math.max(0, inimigo.ticksPertoClinger - 1);
-            }
-
-            if (inimigo.ticksPertoClinger > 50) {
-                if (!clingerDetectadoNesteRound.contains(nomeInimigo)) {
-                    clingerDetectadoNesteRound.add(nomeInimigo);
-                    roundsSendoClinger.put(nomeInimigo, roundsSendoClinger.getOrDefault(nomeInimigo, 0) + 1);
-                }
-                inimigo.ehClinger = true;
-                inimigo.classificadoComoSurfer = false; // Corrige falso positivo
-            } else if (inimigo.ticksPertoClinger == 0 && roundsSendoClinger.getOrDefault(nomeInimigo, 0) < 2) {
-                inimigo.ehClinger = false;
-            }
-
-            // Se ele já foi clinger por >= 2 rounds na partida inteira, liga o override definitivo
-            if (roundsSendoClinger.getOrDefault(nomeInimigo, 0) >= 2) {
-                inimigo.ehClinger = true;
-                inimigo.classificadoComoSurfer = false;
             }
             
             double quedaEnergia = inimigo.energiaAnterior - e.getEnergy();
@@ -1390,15 +1369,23 @@ public class BT_7274 extends AdvancedRobot {
             inimigo.ultimaVelocidadeLateral = velLateral;
             
             double perpendicularidade = Math.abs(Math.cos(inimigo.direcao - (getHeadingRadians() + inimigo.anguloAbsolutoRadianos)));
+            double incSurfer = (getOthers() <= 1) ? 0.4 : 0.1; 
+            double decSurfer = (getOthers() <= 1) ? 0.01 : 0.02;
+
             if (perpendicularidade < 0.6 && inimigo.saldoPrecisao < -1.0 && inimigo.reversoesLaterais > 2) {
-                inimigo.fatorSurf = Math.min(1.0, inimigo.fatorSurf + 0.1);
+                inimigo.fatorSurf = Math.min(1.0, inimigo.fatorSurf + incSurfer);
             } else {
-                inimigo.fatorSurf = Math.max(0.0, inimigo.fatorSurf - 0.02);
+                inimigo.fatorSurf = Math.max(0.0, inimigo.fatorSurf - decSurfer);
             }
             
-            if (inimigo.fatorSurf > 0.4) {
+            if (perpendicularidade < 0.8 && inimigo.reversoesLaterais > 4) {
+                inimigo.fatorSurf = Math.min(1.0, inimigo.fatorSurf + (incSurfer * 1.5));
+            }
+            if (inimigo.fatorSurf > 0.25 || (inimigo.reversoesLaterais > 6)) {
                 inimigo.classificadoComoSurfer = true;
-            } else if (inimigo.fatorSurf == 0.0 && inimigo.reversoesLaterais < 3) {
+                inimigo.classificadoComoBasico = false;
+                inimigo.ehClinger = false; // Se comprovou ser Surfer, anula o status genérico de Clinger
+            } else if (inimigo.fatorSurf <= 0.1 && inimigo.reversoesLaterais < 3) {
                 inimigo.classificadoComoSurfer = false;
             }
             
@@ -1463,13 +1450,16 @@ public class BT_7274 extends AdvancedRobot {
                 }
             }
 
-            // E APLICAR O CLINGER DEFINITIVO DO ROUND ANTERIOR
+            alvo = inimigo; 
+            
+            // MODO CLINGER GENÉRICO INICIAL
+            inimigo.ehClinger = true;
+
+            // APLICAR O CLINGER DEFINITIVO DO ROUND ANTERIOR
             if (roundsSendoClinger.getOrDefault(nomeInimigo, 0) >= 2) {
                 inimigo.ehClinger = true;
                 inimigo.classificadoComoSurfer = false;
             }
-
-            alvo = inimigo; 
 
             inimigo.anguloAbsolutoRadianos = getHeadingRadians() + e.getBearingRadians();
             inimigo.distancia = e.getDistance();
@@ -1483,7 +1473,7 @@ public class BT_7274 extends AdvancedRobot {
                 inimigoTicksParado_1v1 = 0;
             }
 
-            // MODO CLINGER: DETECÇÃO
+            // MODO CLINGER: DETECÇÃO SECUNDÁRIA DE MEMÓRIA (Se não foi pego no override, salva pro round que vem)
             if (e.getDistance() < 230) {
                 inimigo.ticksPertoClinger++;
             } else if (e.getDistance() > 310) {
@@ -1495,16 +1485,6 @@ public class BT_7274 extends AdvancedRobot {
                     clingerDetectadoNesteRound.add(nomeInimigo);
                     roundsSendoClinger.put(nomeInimigo, roundsSendoClinger.getOrDefault(nomeInimigo, 0) + 1);
                 }
-                inimigo.ehClinger = true;
-                inimigo.classificadoComoSurfer = false; // Corrige falso positivo
-            } else if (inimigo.ticksPertoClinger == 0 && roundsSendoClinger.getOrDefault(nomeInimigo, 0) < 2) {
-                inimigo.ehClinger = false;
-            }
-
-            // Se ele já foi clinger por >= 2 rounds na partida inteira, liga o override definitivo
-            if (roundsSendoClinger.getOrDefault(nomeInimigo, 0) >= 2) {
-                inimigo.ehClinger = true;
-                inimigo.classificadoComoSurfer = false;
             }
             
             inimigo.setLocation(Utilitario.projetar(new Point2D.Double(getX(), getY()), inimigo.anguloAbsolutoRadianos, inimigo.distancia));
@@ -1514,10 +1494,13 @@ public class BT_7274 extends AdvancedRobot {
             if (inimigo.historicoVelocidade.size() > 50) inimigo.historicoVelocidade.removeLast();
             if (inimigo.historicoDeltaDirecao.size() > 50) inimigo.historicoDeltaDirecao.removeLast();
             
-            // INTEGRAÇÃO: Atualizando perfis de predição do arquivo upado
+            // INTEGRAÇÃO: Atualizando perfis de predição do arquivo upado (PESO MAIOR EM 1V1)
             double hChange1v1 = Utils.normalRelativeAngle(inimigo.direcao - inimigo.ultimaDirecao);
-            inimigo.avgVelocity1v1 = (inimigo.velocidade * 0.7) + (inimigo.avgVelocity1v1 * 0.3);
-            inimigo.avgHeadingChange1v1 = (hChange1v1 * 0.7) + (inimigo.avgHeadingChange1v1 * 0.3);
+            double pesoAtual = (getOthers() <= 1) ? 0.95 : 0.7;
+            double pesoAnterior = 1.0 - pesoAtual;
+            
+            inimigo.avgVelocity1v1 = (inimigo.velocidade * pesoAtual) + (inimigo.avgVelocity1v1 * pesoAnterior);
+            inimigo.avgHeadingChange1v1 = (hChange1v1 * pesoAtual) + (inimigo.avgHeadingChange1v1 * pesoAnterior);
             
             double distParedeInimigo = Math.min(
                 Math.min(inimigo.x, campoBatalha.width - inimigo.x), 
@@ -1541,11 +1524,11 @@ public class BT_7274 extends AdvancedRobot {
             if (isClinger || isLinear) {
                 inimigo.classificadoComoBasico = true;
                 inimigo.classificadoComoIntermediario = false;
-                inimigo.classificadoComoSurfer = false;
+                // inimigo.classificadoComoSurfer = false; // Removido para priorizar fatorSurf em 1v1
             } else if (isFollower) {
                 inimigo.classificadoComoBasico = false;
                 inimigo.classificadoComoIntermediario = true;
-                inimigo.classificadoComoSurfer = false;
+                // inimigo.classificadoComoSurfer = false;
             } else {
                 inimigo.classificadoComoBasico = false;
                 inimigo.classificadoComoIntermediario = false;
@@ -1566,24 +1549,23 @@ public class BT_7274 extends AdvancedRobot {
             inimigo.ultimaVelocidadeLateral = velLateralAtual;
             
             double perpendicularidade = Math.abs(Math.cos(inimigo.direcao - (getHeadingRadians() + inimigo.anguloAbsolutoRadianos)));
+            double incSurfer = (getOthers() <= 1) ? 0.4 : 0.1; // Peso muito maior no 1v1
+            double decSurfer = (getOthers() <= 1) ? 0.01 : 0.02;
+
             if (perpendicularidade < 0.6 && inimigo.saldoPrecisao < -1.0 && inimigo.reversoesLaterais > 2) {
-                inimigo.fatorSurf = Math.min(1.0, inimigo.fatorSurf + 0.1);
+                inimigo.fatorSurf = Math.min(1.0, inimigo.fatorSurf + incSurfer);
             } else {
-                inimigo.fatorSurf = Math.max(0.0, inimigo.fatorSurf - 0.02);
+                inimigo.fatorSurf = Math.max(0.0, inimigo.fatorSurf - decSurfer);
             }
             
             if (perpendicularidade < 0.8 && inimigo.reversoesLaterais > 4) {
-                inimigo.fatorSurf = Math.min(1.0, inimigo.fatorSurf + 0.15);
+                inimigo.fatorSurf = Math.min(1.0, inimigo.fatorSurf + (incSurfer * 1.5));
             }
-            if (inimigo.fatorSurf > 0.25 || (inimigo.reversoesLaterais > 6 && !isClinger)) {
+            if (inimigo.fatorSurf > 0.25 || (inimigo.reversoesLaterais > 6)) {
                 inimigo.classificadoComoSurfer = true;
                 inimigo.classificadoComoBasico = false;
+                inimigo.ehClinger = false; // Cancela a tag de Clinger se for Surfer
             } else if (inimigo.fatorSurf <= 0.1 && inimigo.reversoesLaterais < 3) {
-                inimigo.classificadoComoSurfer = false;
-            }
-
-            // Impede Surfing falso no Clinger
-            if (inimigo.ehClinger) {
                 inimigo.classificadoComoSurfer = false;
             }
             
