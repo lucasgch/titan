@@ -128,5 +128,5 @@ Estende a classe `Condition` do Robocode. Rastreia as ondas geradas pelos **noss
 
 ## 🏆 Resultados da Batalha
 
-* **Batalha Melee**: 🥇 1º Lugar
-* **Batalha 1x1**: 🥈 2º Lugar
+* **Batalha Melee**: 🥇 1º Lugar (11 robôs)
+* **Batalha 1x1**: 🥈 2º Lugar (3 robôs)
