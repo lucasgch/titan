@@ -42,40 +42,84 @@ Se você é um contribuidor deste repositório, faça o push das alterações pa
 
 Se você não é um contribuir, mas enviar um robô ou uma contribuição, envie um Pull Request.
 
-## 🚀 Funcionalidades e Sistemas do BT-7274
+# BT-7274 (Versão Elite) 🤖🚀
+### Robô Avançado para Robocode (AdvancedRobot)
 
-O BT-7274 opera sob uma arquitetura de IA híbrida, alternando dinamicamente entre táticas de combate baseadas na contagem de inimigos (Melee vs 1v1) e no nível de inteligência do adversário.
+O **BT-7274** é um robô de combate de alta densidade computacional desenvolvido para a plataforma Robocode. Ele utiliza uma arquitetura híbrida focada em **Mira Extrema Multi-Algorítmica** combinada com sistemas de defesa baseados em **Wave Surfing** e movimentação preditiva orbital (**MRM / ARIMA**). O robô é capaz de se adaptar dinamicamente ao comportamento do adversário em tempo real e reter o aprendizado entre os rounds através de memória persistente estática.
 
-### 🛡️ Movimentação e Defesa
-* **Wave Surfing Dedicado (1v1):** Sistema de esquiva que mapeia as probabilidades de tiro do inimigo em 47 ângulos ("bins"). Possui um buffer de memória isolado apenas para o 1v1, garantindo que os dados não sejam poluídos pelos tiros aleatórios do modo Melee.
-* **Path Simulation com Inertia Control:** O robô não apenas decide para onde ir, mas simula a física exata da engine do Robocode (aceleração de `+1.0` e frenagem de `-2.0`) tick-a-tick para prever se conseguirá desviar da bala a tempo.
-* **Multi-Wave Pathing:** Durante a simulação de fuga de uma bala, o BT-7274 calcula se a sua rota de colisão cruzará com outras ondas secundárias no meio do caminho, escolhendo rotas que evitem "fogo cruzado".
-* **Minimum Risk Movement (MRM):** Cérebro de navegação macro para o modo Melee. Avalia até 150 pontos no mapa aplicando forças gravitacionais (foge de cantos, paredes, centro da arena e múltiplos inimigos).
-* **Modo Predador (Anti-basic Override):** Se o robô detecta que o adversário no 1v1 é um robô básico (não-surfer), ele desliga o processamento do Wave Surfing e injeta um bônus agressivo de atração de 250% no MRM, caçando o inimigo implacavelmente.
-* **Passive Bullet Shadowing:** Em batalhas Melee, o robô é capaz de usar o corpo de outros inimigos como escudo, zerando o risco de áreas do mapa onde um inimigo "A" atiraria, mas a bala bateria no inimigo "B" antes.
-* **Movimento Caótico (Jitter):** Introduz uma micro-tremulação baseada em ondas senoidais para quebrar o travamento de robôs que usam miras de predição linear.
+---
 
-### 🎯 Mira e Armamento (Virtual Guns)
-O robô simula simultaneamente 9 armas diferentes em sua memória, disparando apenas a que tem a maior taxa de acerto contra o alvo atual.
-1.  **GunWave GF:** *Guess Factor Targeting* clássico baseado em Visit Count. Letal contra alvos que tentam desviar.
-2.  **KNN Pesado (Machine Learning):** *K-Nearest Neighbors*. Lê até 30.000 estados passados do inimigo (Aceleração, Velocidade Lateral, Curvas) e compara com o momento atual para prever o tiro.
-3.  **ARMA (AutoRegressive Moving Average):** Estatística de Séries Temporais para prever posições baseadas em médias móveis.
-4.  **ARIMA:** Evolução do ARMA que utiliza derivadas e diferenças para calcular movimentos não-estacionários do oponente.
-5.  **Miras Auxiliares (Linear, Circular, Head-On e Médias):** Armas de *fallback* extremamente eficientes contra robôs básicos.
-* **Acoplamento Wave-to-Wave:** Sincroniza o Surfing de defesa com o GunWave de ataque automaticamente em combates de Elite no 1v1.
-* **Júri Dinâmico e Trava de Armas (Locks):** Avalia e pune armas ineficientes, travando a melhor. Contra bots básicos, bloqueia o uso de processamento do KNN/GunWave e usa apenas miras matemáticas exatas.
+## 🌟 Principais Funcionalidades e Diferenciais
 
-### 🧠 Inteligência e Profiling (Classificação de Inimigos)
-* **Classificação Dinâmica:** Analisa perpendicularidade e taxas de reversão lateral (frenagens bruscas) para rotular inimigos em tempo real como: `Básico` (Clinger/Linear) ou `Avançado` (Surfer).
-* **Sistema de Nêmesis:** Possui uma memória de longo prazo (entre rounds) que lembra quais robôs o derrotaram mais de 5 vezes seguidas. Caso enfrente o Nêmesis, quebra o próprio padrão de tiro e alterna a arma de forma forçada.
-* **Detecção de Tiros por Queda de Energia:** Identifica o exato momento que um inimigo atirou ao ler quedas repentinas de 0.1 a 3.0 na barra de energia adversária.
+* **Override de Surfer Adaptativo:** Alterna dinamicamente a sua tática de esquiva e mira de acordo com a precisão e o perfil do inimigo, escolhendo entre sistemas como *KNN Pesado*, *Anti-Trem* e *GunWave GuessFactor*.
+* **Override MRM Agressivo:** Em combates 1v1 contra robôs que não possuem esquiva complexa (*non-surfers*), ele desativa a defesa reativa de ondas e assume uma órbita agressiva a 300px de distância para maximizar o dano.
+* **Shadow Waves & Shadow Ativo:** Mecânica inovadora que projeta as intersecções dos próprios projéteis no ar para se camuflar e se esconder atrás de seus próprios tiros.
+* **Multi-Wave Surfing Pesado:** Ativado automaticamente se houver mais de 3 inimigos vivos na arena, triplicando a atração de sombras e gerenciando múltiplas ondas de perigo simultaneamente.
+* **Persistência Estática:** Mantém um histórico detalhado e o perfil classificado de cada adversário (*Básico*, *Intermediário*, *Surfer* ou *Clinger*) salvo de um round para o outro.
+* **HUD Visual Avançado (`onPaint`):** Renderiza em tempo real linhas de laser contínuas, simulações de trajetória de alvo, círculos de expansão de ondas e um painel completo com a taxa de acerto de cada uma das suas **9 Virtual Guns**.
 
-### 🖥️ UX e Telemetria (HUD e Logs)
-* **Pathing Visual:** Desenha diretamente na arena (usando `onPaint`) a linha exata da curva de fuga calculada pelo Wave Surfing e o destino projetado pelo MRM.
-* **Painel Tático em Tela:** Exibe em tempo real:
-    * Arma atual ativa e motivo da escolha (ex: Lock de Precisão, Lock de Nêmesis).
-    * Hit Rate Global e Derrotas Seguidas.
-    * Estado de Confiança do Motor (Percentual de controle do Wave Surfing vs MRM).
-    * Precisão teórica ao vivo das 9 Virtual Guns.
-* **Relatório Tático de Fim de Round:** Imprime no console do Java um log massivo detalhando o tipo de cada oponente detectado, a eficácia das armas e qual sistema defensivo controlou o robô.
-* **Tributo Protocolo 3:** Em caso de vitória no round, exibe as clássicas últimas mensagens do Titã original e performa uma dança de vitória com o radar.
+---
+
+## 🛠️ Sistema de Armas Virtuais (Virtual Guns)
+O robô monitora a eficácia de 9 sub-mecanismos de mira independentes para travar na arma de maior precisão contra cada inimigo específico:
+1. `Auxiliar`
+2. `ARMA` (Analítica / Preditiva)
+3. `ARIMA`
+4. `Rede Neural`
+5. `Dynamic Clustering`
+6. `Anti-Trem`
+7. `Média GF`
+8. `KNN Pesado`
+9. `GunWave GF` (Com capacidade elevada para 101 BINS de resolução)
+
+---
+
+## 📜 Estrutura de Código e Lista de Funções
+
+Abaixo estão listadas todas as funções e métodos organizados por classe e escopo de atuação no código-fonte.
+
+### 1. Classe Principal (`BT_7274`)
+
+Gere os estados globais do robô, as respostas do sistema físico aos eventos do Robocode, o HUD gráfico e as rotinas de decisão estratégica.
+
+* `BT_7274()`: **Construtor.** Inicializa o motor de movimento secundário e aloca as coleções estruturadas para os pontos de simulação espacial.
+* `run()`: *[Herdado de AdvancedRobot]* Lógica de execução principal e contínua do ciclo de vida do robô. Define as configurações de cores da carcaça/radar, desconecta o giro do radar/canhão da base e roda o loop infinito de iteração de turnos.
+* `onScannedRobot(ScannedRobotEvent e)`: *[Herdado de AdvancedRobot]* Evento disparado continuamente quando o radar detecta um robô inimigo. É o núcleo analítico: atualiza dados telemétricos, registra histórico de velocidades, escolhe a melhor arma do arsenal de Virtual Guns e gerencia as ordens de disparo e travamento de radar.
+* `onPaint(Graphics2D g)`: *[Herdado de AdvancedRobot]* Renderiza toda a interface gráfica de telemetria na tela de simulação. Desenha o status atual do robô, taxas de acerto globais e individuais, predição de posições futuras do adversário através de pontos amarelos e o mapeamento de risco das ondas.
+* `onHitWall(HitWallEvent e)`: *[Herdado de AdvancedRobot]* Trata colisões físicas contra as paredes. Inverte o sentido de movimento, força um deslocamento reverso para escapar do travamento mecânico (`Wall Hump Fix`) e reposiciona o alvo de fuga temporariamente no centro do campo de batalha.
+* `onHitRobot(HitRobotEvent e)`: *[Herdado de AdvancedRobot]* Evento acionado quando ocorre colisão direta com outro robô. Ativa instantaneamente o flag de detecção de inimigos do tipo `Clinger` (grudadores) para forçar um distanciamento defensivo imediato.
+* `executarSurfing()`: Função central da defesa do robô. Avalia todas as ondas de tiros inimigos em aproximação, calcula os tempos de voo dos projéteis adversários e decide o melhor vetor de esquiva. Possui salvaguardas para desativação inteligente em cenários específicos de 1v1.
+* `atualizarCaminhoVisual(OndaInimiga ondaPrimaria, int direcaoAcao)`: Atualiza a lista interna de coordenadas cartesianas do caminho ideal para que o sistema de pintura gráfica exiba a linha contínua de evasão preditiva na tela.
+* `preverRiscoMovimento(OndaInimiga ondaPrimaria, int direcaoAcao)`: Realiza uma simulação hipotética "passo a passo" do robô movendo-se para frente, para trás ou permanecendo estático. Calcula matematicamente o risco cumulativo de cada escolha com base nos bins de GuessFactor mais atingidos pelo oponente.
+
+### 2. Classe Interna Estática `Utilitario`
+
+Agrupa funções matemáticas puras e algoritmos geométricos compartilhados por todo o sistema.
+
+* `limitar(double valor, double min, double max)`: Clampa um valor numérico para que ele não ultrapasse as barreiras informadas. Essencial para evitar que o robô tente se mover para fora dos limites físicos da arena.
+* `aleatorioEntre(double min, double max)`: Retorna um número randômico decimal contido estritamente dentro do intervalo fornecido.
+* `projetar(Point2D origem, double angulo, double distancia)`: Executa cálculos trigonométricos baseados em seno e cosseno para projetar e retornar uma nova coordenada (`Point2D.Double`) no plano cartesiano a partir de um ponto, uma direção radial e uma distância.
+* `anguloAbsoluto(Point2D origem, Point2D alvo)`: Retorna o arco tangente real (ângulo absoluto em radianos) formado pela linha reta entre dois pontos no campo de batalha.
+* `sinal(double v)`: Retorna `1` se o valor de entrada for positivo ou zero, e `-1` se o valor for negativo. Utilizado para simplificar multiplicações de orientação direcional.
+
+### 3. Classe Interna `OndaInimiga`
+
+Representa a simulação matemática de um projétil disparado por um adversário se propagando pelo cenário como uma onda circular.
+
+* `checarAcerto(double posX, double posY, long tempoAtual)`: Determina se o raio de expansão da onda de energia do tiro inimigo ultrapassou a posição atual do nosso robô. Em caso positivo, computa o bin correspondente no histórico estatístico e limpa a onda da fila de processamento.
+* `obterBin(double alvoX, double alvoY)`: Calcula o ângulo de deslocamento relativo do robô em relação à trajetória retilínea original do tiro inimigo e mapeia esse desvio para um índice numérico (Bin de 0 a 46) proporcional ao Ângulo de Escape Máximo.
+
+### 4. Classe Interna `Movimento_1VS1`
+
+Gerenciador secundário de movimentação geométrica utilizado como fallback contra robôs mais básicos ou em situações controladas de duelo individual.
+
+* `Movimento_1VS1(AdvancedRobot _robô)`: Construtor. Vincula a instância principal para controle dos eixos de direção.
+* `onScannedRobot(ScannedRobotEvent e)`: Implementa um algoritmo orbital tático clássico. Calcula uma trajetória circular ao redor do inimigo que se ajusta em relação às paredes do mapa para evitar encurralamentos.
+
+### 5. Classe Interna `Onda`
+
+Estende a classe `Condition` do Robocode. Rastreia as ondas geradas pelos **nossos próprios disparos** para pontuar a assertividade de cada uma das 9 Virtual Guns.
+
+* `Onda(AdvancedRobot _robô)`: Construtor que inicializa as propriedades da onda do disparo do BT-7274, salvando o ponto de partida do canhão e a assinatura de comportamento do inimigo naquele instante.
+* `test()`: Método avaliador assíncrono disparado automaticamente pelo Robocode a cada turno. Monitora a expansão do tiro até o alvo. Quando a onda intercepta o oponente, ele calcula qual bin GuessFactor seria o ideal, pontua com pesos atenuados as armas virtuais que previram aquele bin com sucesso e limpa o evento customizado da memória.
+* `registrarMiraKNNPesado(Robo inimigo, Robo meuRobo)`: Extrai as características de estado atuais (*features*) do inimigo, correlaciona com o bin real atingido pela onda e insere no banco de dados multidimensional do algoritmo KNN para consultas de mira futuras.
