@@ -123,3 +123,10 @@ Estende a classe `Condition` do Robocode. Rastreia as ondas geradas pelos **noss
 * `Onda(AdvancedRobot _robô)`: Construtor que inicializa as propriedades da onda do disparo do BT-7274, salvando o ponto de partida do canhão e a assinatura de comportamento do inimigo naquele instante.
 * `test()`: Método avaliador assíncrono disparado automaticamente pelo Robocode a cada turno. Monitora a expansão do tiro até o alvo. Quando a onda intercepta o oponente, ele calcula qual bin GuessFactor seria o ideal, pontua com pesos atenuados as armas virtuais que previram aquele bin com sucesso e limpa o evento customizado da memória.
 * `registrarMiraKNNPesado(Robo inimigo, Robo meuRobo)`: Extrai as características de estado atuais (*features*) do inimigo, correlaciona com o bin real atingido pela onda e insere no banco de dados multidimensional do algoritmo KNN para consultas de mira futuras.
+
+---
+
+## 🏆 Resultados da Batalha
+
+* **Batalha Melee**: 🥇 1º Lugar
+* **Batalha 1x1**: 🥈 2º Lugar
