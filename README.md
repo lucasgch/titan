@@ -67,15 +67,15 @@ O BT-7274 gerencia seu posicionamento através de um sistema de pesos de confian
 O coração ofensivo do robô baseia-se em um barramento de **9 Virtual Guns (Armas Virtuais)** executadas de forma paralela. Cada vez que o robô atira, uma `Onda` virtual monitora o desempenho teórico de cada um dos 9 algoritmos de mira. O robô armazena as estatísticas de disparos reais (`disparosReaisVG`) e acertos reais (`acertosReaisVG`) para calcular a precisão de cada módulo.
 
 ### O Arsenal das 9 Virtual Guns (VGs):
-1. **Auxiliar (0):** Algoritmo de fallback estatístico de suporte.
-2. **ARMA (1):** Mira Analítica / Preditiva de alta frequência.
-3. **ARIMA (2):** Mira matemática baseada em regressão linear de séries temporais.
-4. **Rede Neural (3):** IA preditiva de padrões comportamentais de aceleração e ângulo.
-5. **Dynamic Clustering (4):** Agrupamento dinâmico de dados baseado em estados semelhantes.
-6. **Anti-Trem (5):** Filtro de mira especializado em anular robôs com movimentos oscilatórios e trepidações.
-7. **Média GF (6):** Mira balanceada por médias históricas de GuessFactor.
-8. **KNN Pesado (7):** Algoritmo de K-Nearest Neighbors associado a um banco multidimensional de até 30.000 registros de características físicas do alvo (`featuresKNN`).
-9. **GunWave GF (8):** Sistema analítico com resolução ultra-elevada expandida para 101 BINS e simulação de até 800 pontos previstos.
+1. **Auxiliar (0)**
+2. **ARMA Analítica / Preditiva (1)**
+3. **ARIMA (2)**
+4. **Rede Neural (3)**
+5. **Dynamic Clustering (4)**
+6. **Anti-Trem (5)**
+7. **Média GF (6)**
+8. **KNN Pesado (7)**
+9. **GunWave GF 101 BINS (8)**
 
 ### Regras de Transição e Travamento de Armas (*Locks*):
 O robô possui um tomador de decisão heurístico que escolhe a melhor arma com base no perfil do alvo, mas aplica travas rígidas (*locks*) automáticas sob as seguintes circunstâncias:
@@ -87,7 +87,27 @@ O robô possui um tomador de decisão heurístico que escolhe a melhor arma com 
 
 ---
 
-## 💾 3. Persistência de Estado (Memória Estática)
+## 📊 3. Sistema de Classificação Dinâmica de Adversários
+
+O BT-7274 não combate todos os inimigos da mesma forma. Ele possui um motor analítico de heurísticas comportamentais que avalia a movimentação e a reação do oponente para rotulá-lo em uma de **quatro classes estritas**. Essa classificação dita o comportamento imediato das engines de movimento e de mira:
+
+### As Quatro Classes de Perfis:
+1. **Clinger (Colisor / Rammer):**
+   * *Gatilho de Identificação:* Ativado instantaneamente através do evento `onHitRobot` ou se a telemetria detectar o inimigo mantendo-se intencionalmente a distâncias críticas inferiores a 120px.
+   * *Impacto Estratégico:* Desativa a engine de Wave Surfing e ativa 100% da movimentação orbital MRM/ARIMA a curta distância. Trava a mira na arma analítica direta.
+2. **Surfer (Avançado / Esquiva por Ondas):**
+   * *Gatilho de Identificação:* Identificado se o robô adversário exibir desacelerações repentinas ou reversões de marcha perfeitamente sincronizadas com o momento exato em que o BT-7274 dispara uma onda (`Onda.test()`), ou se as armas preditivas básicas mantiverem acertos próximos a zero.
+   * *Impacto Estratégico:* Ativa a engine completa de Wave Surfing de 47 Bins com predição de risco em profundidade e restringe o canhão para operar estritamente via KNN Pesado ou GunWave GF.
+3. **Intermediário (Random / Oscilatório / Trem):**
+   * *Gatilho de Identificação:* Detectado quando o inimigo inverte a direção constantemente em intervalos muito curtos de tempo (ticks) sem se deslocar significativamente de sua área original, tentando confundir algoritmos lineares através de ruído físico.
+   * *Impacto Estratégico:* Mantém o Wave Surfing ativo em nível moderado e força o sistema de armas a priorizar o algoritmo **Anti-Trem**, projetado especificamente para filtrar as oscilações periódicas e atingir o centro de massa do alvo.
+4. **Básico (Linear / Circular / Não-Surfer):**
+   * *Gatilho de Identificação:* Rótulo padrão atribuído a robôs que mantêm velocidades constantes em linhas retas ou trajetórias circulares previsíveis, ignorando completamente os disparos efetuados contra eles.
+   * *Impacto Estratégico:* Ativa o *Override MRM Agressivo*, desligando o processamento do Wave Surfing para economizar energia do motor e assumindo uma órbita intimidadora a 300px. Trava o canhão na mira analítica/preditiva padrão para abatê-lo rapidamente.
+
+---
+
+## 💾 4. Persistência de Estado (Memória Estática)
 
 Para garantir que o BT-7274 não precise remapear o adversário a cada início de round, ele utiliza estruturas de memória persistente estática (`static HashMap`) que retêm as assinaturas descobertas ao longo de toda a partida:
 * `historicoArmaPorInimigo`: Salva o ID da arma virtual mais bem-sucedida contra cada oponente.
@@ -96,7 +116,7 @@ Para garantir que o BT-7274 não precise remapear o adversário a cada início d
 
 ---
 
-## 📜 4. Estrutura de Código e Lista de Funções
+## 📜 5. Estrutura de Código e Lista de Funções
 
 ### Classe Principal (`BT_7274`)
 Gere os estados globais do robô, as respostas do sistema físico aos eventos do Robocode, o HUD gráfico e as rotinas de decisão estratégica.
@@ -105,7 +125,7 @@ Gere os estados globais do robô, as respostas do sistema físico aos eventos do
 * `run()`: Lógica de execução principal e contínua do ciclo de vida do robô. Define as configurações de cores da carcaça/radar, desconecta o giro do radar/canhão da base e roda o loop infinito de iteração de turnos.
 * `onScannedRobot(ScannedRobotEvent e)`: Evento disparado continuamente quando o radar detecta um robô inimigo. É o núcleo analítico: atualiza dados telemétricos, registra histórico de velocidades, escolhe a melhor arma do arsenal de Virtual Guns e gerencia as ordens de disparo e travamento de radar.
 * `onPaint(Graphics2D g)`: Renderiza toda a interface gráfica de telemetria na tela de simulação. Desenha o status atual do robô, as taxas de acerto individuais de cada uma das 9 Virtual Guns, linhas laser de mira contínua, caminhos de evasão e predição de posições futuras do adversário com quadrados amarelos.
-* `onHitWall(HitWallEvent e)`: Trata colisões físicas contra as paredes. Inverte o sentido de movimento lateral, força um deslocamento reverso para escapar do travamento mecânico e reposiciona o alvo de fuga temporariamente no centro do campo de batalha.
+* `onHitWall(HitWallEvent e)`: Trata colisões físicas contra as paredes. Inverte o sentido de movimento lateral, força um deslocamento reverso para escapar do travamento mecânico (`Wall Hump Fix`) e reposiciona o alvo de fuga temporariamente no centro do campo de batalha.
 * `onHitRobot(HitRobotEvent e)`: Evento acionado quando ocorre colisão direta com outro robô. Ativa instantaneamente o flag de detecção de inimigos do tipo `Clinger` (grudadores) para forçar um distanciamento defensivo imediato e a alteração dos motores de movimento e armas.
 * `executarSurfing()`: Função central da defesa do robô. Avalia todas as ondas de tiros inimigos em aproximação, calcula os tempos de voo dos projéteis adversários e decide o melhor vetor de esquiva. Possui salvaguardas para desativação inteligente em cenários específicos de 1v1 contra alvos simples.
 * `atualizarCaminhoVisual(OndaInimiga ondaPrimaria, int direcaoAcao)`: Atualiza a lista interna de coordenadas cartesianas do caminho ideal para que o sistema de pintura gráfica exiba a linha contínua de evasão preditiva na tela.
@@ -118,7 +138,7 @@ Agrupa funções matemáticas puras e algoritmos geométricos compartilhados por
 * `aleatorioEntre(double min, double max)`: Retorna um número randômico decimal contido estritamente dentro do intervalo fornecido.
 * `projetar(Point2D origem, double angulo, double distancia)`: Executa cálculos trigonométricos baseados em seno e cosseno para projetar e retornar uma nova coordenada (`Point2D.Double`) no plano cartesiano a partir de um ponto, uma direção radial e uma distância.
 * `anguloAbsoluto(Point2D origem, Point2D alvo)`: Retorna o arco tangente real (ângulo absoluto em radianos) formado pela linha reta entre dois pontos no campo de batalha.
-* `sinal(double v)`: Retorna `1` se o valor de entrada for positivo ou zero, e `-1` se o valor for negativo. Utilizado para simplificar multiplicações de orientação direcional.
+* `sinal(double v)`: Retorna `1` se o valor de entrada for positivo ou zero, e `-1` se o valor foi negativo.
 
 ### Classe Interna `OndaInimiga`
 Representa a simulação matemática de um projétil disparado por um adversário se propagando pelo cenário como uma onda circular.
