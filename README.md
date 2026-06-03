@@ -67,16 +67,43 @@ O BT-7274 gerencia seu posicionamento através de um sistema de pesos de confian
 O coração ofensivo do robô baseia-se em um barramento de **9 Virtual Guns (Armas Virtuais)** executadas de forma paralela. Cada vez que o robô atira, uma `Onda` virtual monitora o desempenho teórico de cada um dos 9 algoritmos de mira. O robô armazena as estatísticas de disparos reais (`disparosReaisVG`) e acertos reais (`acertosReaisVG`) para calcular a precisão de cada módulo.
 
 ### O Arsenal das 9 Virtual Guns (VGs):
-1. **Auxiliar (0)**
-2. **ARMA Analítica / Preditiva (1)**
-3. **ARIMA (2)**
-4. **Rede Neural (3)**
-5. **Dynamic Clustering (4)**
-6. **Anti-Trem (5)**
-7. **Média GF (6)**
-8. **KNN Pesado (7)**
-9. **GunWave GF 101 BINS (8)**
+* **Módulo 0: Auxiliar (Estatística de Backup)**
+    * *Como funciona:* Atua como um buffer probabilístico bruto e sem segmentação complexa. Ele registra os ângulos gerais de maior incidência do inimigo ao longo de toda a partida.
+    * *Foco Tático:* Serve como uma rede de segurança (*fail-safe*). É acionado nos primeiros segundos do Round 1 (quando os outros algoritmos complexos ainda não coletaram dados suficientes) ou se o robô sofrer um reset de dados induzido por falha de leitura telemétrica.
 
+* **Módulo 1: ARMA (Analítica / Preditiva Direta)**
+    * *Como funciona:* Executa cálculos geométricos puros baseados na trigonometria do vetor de movimento atual do alvo. Se o inimigo estiver fazendo uma curva, ele aplica uma projeção circular clássica; se estiver reto, uma projeção linear.
+    * *Foco Tático:* Alvos simples, robôs lineares e oponentes da classe *Clinger* (colisores). Por ter tempo de processamento próximo de zero e resposta imediata, é letal em curtas distâncias, onde o tempo de voo da bala é menor que o tempo de reação de esquiva do inimigo.
+
+* **Módulo 2: ARIMA (Previsão de Séries Temporais)**
+    * *Como funciona:* Baseado no modelo matemático Autorregressivo Integrado de Médias Móveis. Trata o histórico de velocidade lateral e mudanças de direção do oponente como uma linha do tempo sequencial, tentando prever as próximas oscilações com base nas tendências e erros passados.
+    * *Foco Tático:* Robôs que realizam curvas suaves e desacelerações previsíveis em arco. Ele consegue prever o exato momento em que um robô vai frear para não colidir com uma parede bem antes de a frenagem física acontecer.
+
+* **Módulo 3: Rede Neural (Padrões Não-Lineares)**
+    * *Como funciona:* Uma micro-rede neural artificial que recebe como entradas (*inputs*) a distância do alvo, velocidade angular, aceleração atual e tempo decorrido desde a última colisão de parede. A rede processa esses dados em camadas para cuspir o ângulo de disparo mais provável.
+    * *Foco Tático:* Quebrar inteligências artificiais adversárias. É excelente para aprender e decodificar padrões de movimento customizados e complexos de robôs topo de linha que jogam de forma semi-previsível no médio prazo.
+
+* **Módulo 4: Dynamic Clustering (Agrupamento Dinâmico)**
+    * *Como funciona:* Fatia o estado atual da batalha em uma janela de dados multidimensionais. O algoritmo varre o histórico recente em busca de momentos em que a configuração espacial do mapa era parecida com a de agora e extrai o padrão de movimentação resultante desses grupos.
+    * *Foco Tático:* Robôs de transição comportamental (aqueles que mudam de estratégia de esquiva no meio do combate dependendo da energia ou do tempo).
+
+* **Módulo 5: Anti-Trem (Filtro Anti-Oscilação)**
+    * *Como funciona:* Ignora micro-mudanças de alta frequência na velocidade do alvo. Robôs comuns costumam se confundir quando o inimigo aperta as teclas "frente" e "trás" freneticamente para fazer a mira analítica tremer. Esta arma aplica uma média móvel pesada (filtro passa-baixa), mirando estritamente no centro de massa real do movimento macro do oponente.
+    * *Foco Tático:* Robôs com esquiva do tipo *Shaking* (Oscilatórios / Intermediários). Anula completamente a tentativa do inimigo de gerar ruído físico na mira.
+
+* **Módulo 6: Média GF (Média Clássica de GuessFactor)**
+    * *Como funciona:* Divide o Ângulo de Escape Máximo (MEA) do inimigo em um array indexado. Toda vez que uma onda passa pelo oponente, ela computa onde ele estava e adiciona um peso suave a essa estatística histórica.
+    * *Foco Tático:* Estabilidade de longo prazo. Por não sofrer influência drástica de mudanças repentinas de direção de um único turno, esta arma garante uma taxa de acerto sólida contra robôs medianos ao longo de partidas longas (10+ rounds).
+
+* **Módulo 7: KNN Pesado (K-Nearest Neighbors de Alta Densidade)**
+    * *Como funciona:* É a artilharia pesada do robô. Mantém um banco de dados persistente em memória com capacidade para até 30.000 entradas de registros telemétricos (*features*). Ao mirar, ele localiza instantaneamente os *K* registros matematicamente mais próximos da situação atual do inimigo e dispara no ângulo que historicamente mais obteve sucesso contra aquela exata postura do alvo.
+    * *Foco Tático:* Contra-ataque a robôs com defesa de *Wave Surfing Elite*. É capaz de mapear hábitos subconscientes do programador adversário (como a tendência de esquivar mais para a direita quando está perto de paredes).
+
+* **Módulo 8: GunWave GF (Resolução Ultra-Elevada - 101 BINS)**
+    * *Como funciona:* Enquanto uma mira GuessFactor convencional utiliza de 31 a 47 divisões angulares (Bins), este módulo estende a resolução para impressionantes 101 Bins analíticos. Além disso, o algoritmo projeta e simula até 800 pontos virtuais da trajetória do alvo no ar por onda disparada.
+    * *Foco Tático:* Sniper de precisão cirúrgica a longas distâncias. Ideal para encontrar micropontos cegos e falhas de arredondamento em robôs inimigos que possuem movimentação defensiva extremamente precisa.
+
+---
 ### Regras de Transição e Travamento de Armas (*Locks*):
 O robô possui um tomador de decisão heurístico que escolhe a melhor arma com base no perfil do alvo, mas aplica travas rígidas (*locks*) automáticas sob as seguintes circunstâncias:
 * **Lock Anti-Surfer Adaptativo:** Contra robôs classificados como *Surfers*, a inteligência filtra e alterna dinamicamente apenas entre os três módulos de maior letalidade contra esquivas complexas: **KNN Pesado**, **Anti-Trem** e **GunWave GF**.
