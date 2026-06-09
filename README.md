@@ -189,3 +189,50 @@ Estende a classe `Condition` do Robocode. Rastreia as ondas geradas pelos **noss
 
 * **Batalha Melee**: 🥇 1º Lugar (11 robôs)
 * **Batalha Top 3**: 🥈 2º Lugar (3 robôs)
+
+## Relatório
+### 1. Introdução
+### 2. Objetivos da Atividade
+### 3. Descrição da Atividade
+#### 3.1 Processo de Programação do Robô
+O robô do grupo, batizado de **BT_7274**, foi implementado em Java como um `AdvancedRobot` — a classe mais completa do Robocode, que permite controle independente da base, do canhão e do radar.
+
+O desenvolvimento foi conduzido de forma iterativa e incremental: a cada sessão de trabalho, um ou mais membros do grupo implementavam uma nova funcionalidade, testavam localmente no Robocode e então integravam ao repositório via Git. Essa abordagem permitiu que o robô evoluísse progressivamente de uma estrutura básica para um sistema sofisticado ao longo das semanas.
+
+As principais funcionalidades desenvolvidas foram:
+
+-   **Sistema de movimentação:** O robô passou por diversas evoluções de movimento ao longo do projeto. Iniciou com um espelhamento de movimentação simples (mirror), passou por modos de movimentação aleatória e orbital, até chegar a um sistema híbrido com **Wave Surfing** (evasão baseada em ondas de tiros inimigos) e predição por **ARIMA** (modelo matemático de séries temporais). Foram também implementados mecanismos de segurança como a inversão de direção em caso de colisão com paredes (_Wall Hump Fix_) e a adaptação de comportamento em combate _melee_ (múltiplos inimigos) versus duelos 1v1.
+    
+-   **Sistema de mira (Virtual Guns):** Foi desenvolvido um arsenal de 9 armas virtuais executadas em paralelo. Cada arma utiliza um algoritmo diferente de predição — entre eles ARMA, ARIMA, Rede Neural, KNN Pesado, Guess Factor e Linear — e o robô registra estatisticamente qual delas acerta mais contra cada oponente, selecionando automaticamente a de maior eficácia em tempo real. Esse sistema é conhecido na comunidade Robocode como _Virtual Guns_.
+    
+-   **Sistema de radar:** Foi implementado um mecanismo de _radar lock_ (travamento de radar), que mantém o sensor continuamente focado no inimigo-alvo, garantindo atualização constante dos dados de telemetria necessários para os algoritmos de mira e evasão.
+    
+-   **Classificação dinâmica de adversários:** O BT_7274 analisa o comportamento de cada inimigo durante a batalha e o classifica em um dos quatro perfis: _Clinger_ (colisor), _Surfer_ (esquiva avançada), _Intermediário_ (oscilatório) ou _Básico_ (linear/circular). Com base nessa classificação, o robô ajusta automaticamente seus motores de movimento e de mira para o perfil mais eficaz contra aquele oponente específico.
+    
+-   **Persistência de memória entre rounds:** Através de estruturas estáticas (`static HashMap`), o robô retém, entre os rounds de uma mesma partida, o histórico de qual arma virtual foi mais eficaz contra cada adversário e qual foi sua classificação comportamental, evitando reaprender do zero a cada batalha.
+    
+
+#### 3.2 Utilização do Git para Controle de Versão
+
+O Git foi utilizado como ferramenta de controle de versão ao longo de todo o projeto, e sua presença foi determinante para que o grupo conseguisse trabalhar de forma paralela sem conflitos destrutivos. Cada nova funcionalidade ou correção foi registrada como um commit individual, permitindo rastrear com precisão a evolução do código. _(A estrutura de branches, commits e pull requests adotada pelo grupo é detalhada na Seção 4.)_
+
+O que o histórico de commits evidencia na prática é uma progressão técnica clara dividida em três fases:
+
+-   **Fase inicial (28–29 de abril):** criação da estrutura do repositório, definição visual do robô e início do desenvolvimento paralelo com branches individuais.
+-   **Fase de evolução (5–12 de maio):** ciclos intensos de implementação onde múltiplos membros contribuíam simultaneamente, com integrações via pull requests — cobrindo movimentação, sistemas de mira, ARMA, ARIMA, Guess Factor e Anti-Clinger.
+-   **Fase de refinamento (15 de maio):** Maurício conduziu uma sequência final de commits implementando as funcionalidades mais avançadas — KD-Tree híbrida, Virtual Guns, Wave Surfing e correções de radar lock — consolidando a versão final do robô.
+
+#### 3.3 Colaboração entre os Membros e Uso do GitHub
+
+O projeto foi desenvolvido por quatro integrantes — Felipe Rezende, Gustavo Niehues, Lucas de Godoy Chicarelli e Mauricio Telles Silva — com colaboração mediada pelo GitHub.
+
+O fluxo de trabalho adotado pelo grupo foi baseado em branches e pull requests. Cada membro trabalhava em sua própria branch, e as integrações ao código principal eram feitas por meio de pull requests, que foram revisados antes de serem mesclados. Ao longo do projeto, foram abertos e integrados **7 pull requests**, cobrindo desde alterações de movimentação até implementações mais complexas como ARIMA e Virtual Guns.
+
+No que diz respeito à divisão de responsabilidades, **Mauricio Telles Silva assumiu o papel de protagonista técnico do projeto**, sendo responsável pela grande maioria das implementações que definem a identidade e a sofisticação do BT_7274. Analisando o histórico de commits, Mauricio foi o autor direto das funcionalidades mais complexas e determinantes do robô: a implementação dos modelos preditivos ARMA e ARIMA, o sistema completo de Virtual Guns com 9 módulos paralelos, a KD-Tree e sua variante híbrida para busca de vizinhos, o Wave Surfing com bins de GuessFactor, a movimentação orbital Anti-Clinger, a votação de tracking, o mecanismo de caos na movimentação, além das correções críticas de radar lock que garantiram a estabilidade do sistema. Sua atuação se estendeu por todas as fases do projeto — das primeiras sessões de 28 de abril até os commits finais de refinamento em 15 de maio — totalizando a maior parte dos commits individuais do repositório. Foi Mauricio quem estruturou o núcleo técnico do robô e o levou a um nível de complexidade raramente visto em projetos introdutórios.
+
+Os demais membros contribuíram de forma complementar a essa base: Lucas de Godoy adicionou funcionalidades de detecção de mira inimiga com 5 tipos, mutação de movimento e adaptação Melee/1v1, além de ser o principal responsável pela documentação técnica no README e pela adição do `.gitignore`; Felipe realizou refatorações simples, criou branch para testes  e colaborou na organização do repositório, removendo arquivos compilados desnecessários e realizando correções pontuais; Gustavo Niehues também integrou contribuições ao longo do desenvolvimento do projeto.
+
+### 4. Estrutura do Git utilizada
+### 5. Resultados e Aprendizados
+### 6. Conclusão
+### 7. Anexos
