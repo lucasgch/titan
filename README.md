@@ -242,6 +242,10 @@ O desenvolvimento do BT_7274 foi resultado de um processo colaborativo em que di
 
 
 ### 4. Estrutura do Git utilizada
+
+O desenvolvimento do projeto utilizou Git e GitHub como ferramentas de controle de versão e integração de código. O fluxo de trabalho foi baseado em múltiplas branches e em um fork do repositório, permitindo que diferentes funcionalidades fossem desenvolvidas e testadas de forma independente antes da integração ao código principal. O repositório utilizou as branches **master** e **main** como bases de desenvolvimento e integração, além das branches individuais **lucas**, utilizada por Lucas de Godoy Chicarelli, **felipe-robozika** e **feliperezn-patch-1**, utilizadas por Felipe Rezende, e **GustavoNiehues**, utilizada por Gustavo Niehues. Paralelamente, também foi utilizado um fork do projeto para o desenvolvimento de funcionalidades e experimentos realizados de forma isolada do repositório principal. A integração das alterações ocorreu por meio de commits, merges e pull requests, permitindo o desenvolvimento simultâneo de diferentes módulos do BT_7274, reduzindo conflitos e garantindo o rastreamento completo da evolução do código ao longo do projeto.
+
+
 ### 5. Resultados e Aprendizados
 ### 6. Conclusão
 ### 7. Anexos
