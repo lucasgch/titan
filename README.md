@@ -260,7 +260,54 @@ Estende a classe `Condition` do Robocode. Rastreia as ondas geradas pelos **noss
 
 ### 1. Introdução
 
+O desenvolvimento de software moderno envolve não apenas a implementação
+de código, mas também a utilização de ferramentas e práticas que garantam a
+organização, a colaboração entre desenvolvedores e o acompanhamento das
+alterações realizadas ao longo do projeto. Nesse contexto, esta atividade teve
+como objetivo integrar conceitos de programação em Java, utilização do sistema
+operacional Linux e controle de versão por meio do Git, utilizando o Robocode
+como ambiente de desenvolvimento e experimentação.
+
+O Robocode é um ambiente de programação educacional baseado na linguagem
+Java, no qual os participantes desenvolvem robôs autônomos capazes de
+competir entre si em batalhas simuladas. O comportamento desses robôs é
+definido por algoritmos implementados pelos desenvolvedores, permitindo a
+aplicação prática de conceitos de programação orientada a objetos, lógica de
+programação, tomada de decisão e desenvolvimento de estratégias.
+
+Além do desenvolvimento do robô, a atividade buscou proporcionar experiência
+prática com o Git, um sistema de controle de versão amplamente utilizado no
+desenvolvimento de software. O controle de versão possibilita registrar o histórico
+das modificações realizadas no código-fonte, facilitando a identificação de
+alterações, a recuperação de versões anteriores e o trabalho colaborativo entre
+membros de uma equipe. Dessa forma, seu uso contribui para aumentar a
+organização, a rastreabilidade e a confiabilidade do processo de desenvolvimento.
+
+Assim, a realização desta atividade permitiu consolidar conhecimentos técnicos
+relacionados à programação em Java e ao ambiente Linux, ao mesmo tempo em
+que demonstrou a importância da adoção de boas práticas de versionamento de
+código no desenvolvimento de projetos de software.
+
 ### 2. Objetivos da Atividade
+
+• Desenvolver habilidades de programação na linguagem Java por meio da
+implementação de estratégias para robôs no ambiente Robocode;
+
+• Compreender o funcionamento e a importância do sistema de controle de
+versão Git no gerenciamento de projetos de software;
+
+• Praticar o uso de comandos do Git em ambiente Linux, realizando
+operações como criação de repositórios, commits, branches e merge;
+
+• Aplicar conceitos de desenvolvimento colaborativo, utilizando ferramentas
+de versionamento para facilitar a integração das contribuições da equipe;
+
+• Aprimorar o raciocínio lógico e a capacidade de resolução de problemas
+por meio da elaboração de algoritmos para o comportamento dos robôs;
+
+• Familiarizar-se com boas práticas de desenvolvimento de software,
+incluindo organização do código, documentação e controle das alterações
+realizadas durante o projeto.
 
 ### 3. Descrição da Atividade
 
