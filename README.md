@@ -254,7 +254,22 @@ Estende a classe `Condition` do Robocode. Rastreia as ondas geradas pelos **noss
 | 10th | kr.SilvioSantos 3.0                | 19853 (5%)  |  17450   |    100     |    2174    |      16      |     113     |     0     |  1   |  2   |  5   |
 | 11th | ifsc.robocode.IFSCBot\*            | 18022 (4%)  |  16750   |    100     |    1012    |      2       |     146     |    12     |  1   |  2   |  6   |
 
-- **Batalha Top 3**: 🥈 2º Lugar (3 robôs)
+- **Fase A**: 🥇 1º Lugar (3 robôs)
+
+| Rank | Robot Name                         | Total Score | Survival | Surv Bonus | Bullet Dmg | Bullet Bonus | Ram Dmg \*2 | Ram Bonus | 1sts | 2nds | 3rds |
+| :--- | :--------------------------------- | :---------: | :------: | :--------: | :--------: | :----------: | :---------: | :-------: | :--: | :--: | :--: |
+| 1st. | titan.BT_7274 6.6                  | 20528 (46%) |   7200   |    1000    |    10284   |     1547     |     462     |    35     |  50  |  44  |  6   |
+| 2nd. | marquito.Marquito\*                | 15687 (35%) |   4550   |    620     |    8748    |     885      |     774     |    111    |  31  |  29  |  40  |
+| 3rd. | PacoteSuperProtegido.Robozinho 1.0 | 8412 (18%)  |   3250   |    380     |    3604    |     239      |     662     |    7      |  19  |  27  |  54  |
+
+- **Batalha Final**: 🥈 2º Lugar (3 robôs)
+
+| Rank | Robot Name                         | Total Score | Survival | Surv Bonus | Bullet Dmg | Bullet Bonus | Ram Dmg \*2 | Ram Bonus | 1sts | 2nds | 3rds |
+| :--- | :--------------------------------- | :---------: | :------: | :--------: | :--------: | :----------: | :---------: | :-------: | :--: | :--: | :--: |
+| 1st. | IAF.Sudokill 1.2\*                 | 18723 (44%) |   6150   |    1060    |    9555    |     1444     |     438     |    76     |  53  |  17  |  30  |
+| 2nd. | titan.BT_7274 6.6                  | 14996 (35%) |   4750   |    320     |    8687    |     899      |     341     |    0      |  16  |  63  |  21  |
+| 3rd. | steve.Steve 1.0                    | 8831 (21%)  |   4100   |    620     |    3604    |     253      |     234     |    21     |  31  |  20  |  49  |
+
 
 ## Relatório
 
