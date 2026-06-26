@@ -397,3 +397,23 @@ Um dos aspectos que consideramos mais importante foi a utilização das ferramen
 Em síntese, o projeto permitiu não apenas o aprendizado de conceitos técnicos, mas principalmente o desenvolvimento de competências relacionadas à comunicação, cooperação e resolução de problemas. Os conhecimentos adquiridos durante a construção do BT_7274 poderão ser aplicados em futuros projetos acadêmicos e profissionais, servindo como base para o desenvolvimento de sistemas cada vez mais complexos e para a atuação em equipes de desenvolvimento de software.
 
 ### 7. Anexos
+
+### Melee fight
+
+<p align="center">
+  <img src="src/Melee_fight.gif" alt="Batalha melee">
+</p>
+
+### 1v1
+
+<p align="center">
+  <img src="src/1v1.gif" alt="Batalha 1v1">
+</p>
+
+### Relatorios de combate
+
+<p align="center">
+  <img src="src/relatorio_geral.png" alt="Relatorio geral">
+  <img src="src/relatorio_IniPessoal.png" alt="Relatorio personalizado">
+</p>
+
